@@ -14,6 +14,8 @@
   BF16 same-budget matrix.
 - TilePO exposes policy boundaries: coarse, fine, hybrid, and async planning do
   not dominate uniformly.
+- The GitHub checkout includes a live OpenAI-compatible serving bench helper
+  for same-budget KT/TilePO rechecks when the model/runtime assets are provided.
 
 ## Must Qualify
 
@@ -22,6 +24,8 @@
 - A user must provide a compatible MoE checkpoint for real serving evaluation.
 - The default public path is BF16. Low-bit code paths are not serving-quality
   claims in V0.1.
+- The live TilePO hook path is conservative and observe-only unless a future
+  replacement path is explicitly enabled and verified.
 
 ## Cannot Say
 
