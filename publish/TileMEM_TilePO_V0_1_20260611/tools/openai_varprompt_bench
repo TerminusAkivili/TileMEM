@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import resource
+import signal
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--log", required=True)
+    parser.add_argument("--system", required=True)
+    parser.add_argument("--run-name", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--served-model-name", default="")
+    parser.add_argument("--request-count", type=int, default=1)
+    parser.add_argument("--warmup-request-count", type=int, default=0)
+    parser.add_argument("--output-tokens", type=int, default=1)
+    parser.add_argument("--startup-timeout-sec", type=int, default=900)
+    parser.add_argument("--request-timeout-sec", type=float, default=300.0)
+    parser.add_argument("--evidence-level", default="real")
+    parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--prompts-file", default="")
+    parser.add_argument("--runtime-dir", default="")
+    parser.add_argument("--native-tmp-dir", default="")
+    parser.add_argument("--plugin-out", default="")
+    parser.add_argument("--min-c-free-gib", default="0")
+    parser.add_argument("--min-d-free-gib", default="0")
+    parser.add_argument("--max-host-commit-percent", default="100")
+    parser.add_argument("--max-vmmem-gib", default="0")
+    parser.add_argument("--extra-env", action="append", default=[])
+    parser.add_argument("--server-command", nargs=argparse.REMAINDER, required=True)
+    return parser.parse_args()
+
+
+def http_json(url: str, payload: dict[str, Any] | None = None, *, timeout: float) -> dict[str, Any]:
+    data = None
+    headers = {}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def gpu_memory_used_bytes() -> int:
+    try:
+        output = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return 0
+    total_mib = 0
+    for line in output.splitlines():
+        value = line.strip().split(",", 1)[0].strip()
+        if not value:
+            continue
+        try:
+            total_mib += int(float(value))
+        except ValueError:
+            continue
+    return total_mib * 1024 * 1024
+
+
+class GpuMemorySampler:
+    def __init__(self, interval_sec: float = 0.2) -> None:
+        self.interval_sec = interval_sec
+        self.peak_bytes = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._stop.clear()
+        self._sample()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> int:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        self._sample()
+        return self.peak_bytes
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_sec):
+            self._sample()
+
+    def _sample(self) -> None:
+        self.peak_bytes = max(self.peak_bytes, gpu_memory_used_bytes())
+
+
+def percentile_ms(samples_sec: list[float], percentile: float) -> float:
+    if not samples_sec:
+        return 0.0
+    values = sorted(samples_sec)
+    if len(values) == 1:
+        return values[0] * 1000.0
+    rank = (len(values) - 1) * percentile
+    lower = int(rank)
+    upper = min(lower + 1, len(values) - 1)
+    fraction = rank - lower
+    return (values[lower] + (values[upper] - values[lower]) * fraction) * 1000.0
+
+
+def load_prompts(path: str, required: int) -> list[str]:
+    prompts: list[str] = []
+    if path:
+        prompts.extend(
+            line.strip()
+            for line in Path(path).read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+    while len(prompts) < required:
+        prompts.append("explain a small MoE serving benchmark in one sentence")
+    return prompts
+
+
+def parse_extra_env(values: list[str]) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError(f"--extra-env expects KEY=VALUE, got {value!r}")
+        key, val = value.split("=", 1)
+        env[key] = val
+    return env
+
+
+def install_tilepo_sitecustomize(runtime_dir: Path, env: dict[str, str]) -> None:
+    if env.get("TILEPO_ENABLE", "").lower() not in {"1", "true", "yes", "on"}:
+        return
+    site_dir = runtime_dir / "tilepo_sitecustomize"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    (site_dir / "sitecustomize.py").write_text(
+        "import os\n"
+        "if os.environ.get('TILEPO_ENABLE', '').lower() in {'1', 'true', 'yes', 'on'}:\n"
+        "    try:\n"
+        "        from tilepo.kt_patch.bootstrap import bootstrap_from_env\n"
+        "        bootstrap_from_env()\n"
+        "    except Exception as exc:\n"
+        "        marker = os.environ.get('TILEPO_BOOTSTRAP_MARKER')\n"
+        "        if marker:\n"
+        "            import json\n"
+        "            from pathlib import Path\n"
+        "            Path(marker).parent.mkdir(parents=True, exist_ok=True)\n"
+        "            Path(marker).write_text(json.dumps({'enabled': True, 'bootstrap_error': str(exc)}, indent=2) + '\\n')\n"
+        "\n"
+    )
+    path_entries = [str(site_dir), str(ROOT)]
+    existing = env.get("PYTHONPATH", "")
+    if existing:
+        path_entries.append(existing)
+    env["PYTHONPATH"] = os.pathsep.join(path_entries)
+
+
+def stop_process_group(proc: subprocess.Popen[str], *, timeout: float = 20.0) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + timeout
+    while proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def wait_for_server(base_url: str, timeout_sec: int, request_timeout_sec: float) -> float:
+    started = time.monotonic()
+    deadline = started + timeout_sec
+    last_error = ""
+    while time.monotonic() < deadline:
+        try:
+            http_json(f"{base_url}/v1/models", timeout=min(10.0, request_timeout_sec))
+            return time.monotonic() - started
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_error = str(exc)
+            time.sleep(1.0)
+    raise RuntimeError(f"server did not become ready within {timeout_sec}s: {last_error}")
+
+
+def completion(base_url: str, model: str, prompt: str, max_tokens: int, timeout: float) -> dict[str, Any]:
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "max_tokens": max_tokens,
+        "temperature": 0,
+        "stream": False,
+    }
+    return http_json(f"{base_url}/v1/completions", payload, timeout=timeout)
+
+
+def main() -> int:
+    args = parse_args()
+    out_path = Path(args.out)
+    log_path = Path(args.log)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if args.runtime_dir:
+        runtime_dir = Path(args.runtime_dir)
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        runtime_dir = out_path.parent / "runtime" / args.run_name
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+    if args.native_tmp_dir:
+        Path(args.native_tmp_dir).mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(parse_extra_env(args.extra_env))
+    install_tilepo_sitecustomize(runtime_dir, env)
+    command = [item for item in args.server_command if item]
+    if not command:
+        raise SystemExit("--server-command is empty")
+
+    sampler = GpuMemorySampler()
+    server_ready_s = 0.0
+    warmup_latencies: list[float] = []
+    latencies: list[float] = []
+    proc: subprocess.Popen[str] | None = None
+    status = "success"
+    error = ""
+    base_url = f"http://{args.host}:{args.port}"
+    prompts = load_prompts(args.prompts_file, args.request_count + args.warmup_request_count)
+    started_wall = time.time()
+    started = time.monotonic()
+    try:
+        with log_path.open("w") as log:
+            log.write("server_command: " + " ".join(command) + "\n")
+            log.flush()
+            proc = subprocess.Popen(
+                command,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+                env=env,
+            )
+            sampler.start()
+            server_ready_s = wait_for_server(base_url, args.startup_timeout_sec, args.request_timeout_sec)
+            served_model = args.served_model_name or args.model
+            for index in range(args.warmup_request_count):
+                begin = time.perf_counter()
+                completion(base_url, served_model, prompts[index], args.output_tokens, args.request_timeout_sec)
+                warmup_latencies.append(time.perf_counter() - begin)
+            offset = args.warmup_request_count
+            for index in range(args.request_count):
+                begin = time.perf_counter()
+                completion(base_url, served_model, prompts[offset + index], args.output_tokens, args.request_timeout_sec)
+                latencies.append(time.perf_counter() - begin)
+    except Exception as exc:
+        status = "error"
+        error = str(exc)
+    finally:
+        gpu_peak = sampler.stop()
+        if proc is not None:
+            stop_process_group(proc)
+
+    elapsed = max(time.monotonic() - started, 1e-9)
+    measured_tokens = max(args.request_count * max(args.output_tokens, 1), 1)
+    row = {
+        "schema_version": "tilemem_openai_varprompt_bench_v1",
+        "system": args.system,
+        "run_name": args.run_name,
+        "model": args.model,
+        "status": status,
+        "error": error,
+        "evidence_level": args.evidence_level,
+        "simulated": False,
+        "request_count": args.request_count,
+        "warmup_request_count": args.warmup_request_count,
+        "warmup_latency_ms": sum(warmup_latencies) * 1000.0,
+        "measured_latency_ms_total": sum(latencies) * 1000.0,
+        "output_tokens": args.output_tokens,
+        "tok_per_sec": measured_tokens / sum(latencies) if latencies else 0.0,
+        "elapsed_sec": elapsed,
+        "p50_latency_ms": percentile_ms(latencies, 0.50),
+        "p95_latency_ms": percentile_ms(latencies, 0.95),
+        "p99_latency_ms": percentile_ms(latencies, 0.99),
+        "gpu_memory_peak_bytes": gpu_peak,
+        "cpu_memory_peak_bytes": int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss) * 1024,
+        "server_ready_after_sec": server_ready_s,
+        "fallback_count": 0,
+        "dtype_counts": {"bf16": 1},
+        "created_at_unix": started_wall,
+    }
+    if args.plugin_out:
+        Path(args.plugin_out).write_text(json.dumps({"schema_version": "tilemem_plugin_probe_v1", "status": status}, indent=2) + "\n")
+    out_path.write_text(json.dumps(row, sort_keys=True) + "\n")
+    if status != "success":
+        print(error, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

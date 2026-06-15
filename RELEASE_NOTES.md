@@ -14,6 +14,8 @@ placement/admission system for MoE serving.
 - Technical report Markdown snapshot.
 - Offline verification and custom-model quickstart scripts.
 - SHA256 checksum tooling and release package script.
+- OpenAI-compatible live serving bench helper for same-budget KT/TilePO
+  rechecks.
 
 ## Main Evidence
 
@@ -37,7 +39,11 @@ wins.
 
 ```bash
 bash examples/quickstart_offline.sh
+bash scripts/verify_artifact.sh
 ```
+
+The artifact verification gate checks the released evidence matrix, package
+checksums, and the packaged live bench helper.
 
 ## Bring Your Own Model
 
