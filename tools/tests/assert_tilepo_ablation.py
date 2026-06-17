@@ -147,6 +147,8 @@ def main() -> int:
         assert atb_metrics["tc_native_descriptor_count"] == 8
         assert atb_metrics["tc_native_consumed_tile_count"] == 16384
         assert atb_metrics["execution_dispatch_units"] == 8
+        assert atb_metrics["cuda_descriptor_metrics_measured"] is True
+        assert atb_metrics["cuda_descriptor_traversal_us"] >= 0.0
         sglang_hook.reset_for_tests()
         sglang_hook.configure_sglang_hook_runtime(
             atb_runtime,
