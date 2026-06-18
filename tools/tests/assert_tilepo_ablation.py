@@ -165,9 +165,16 @@ def main() -> int:
             target_name="KTEPWrapperMethod.apply",
         )
         hook_metrics = dict(sglang_hook._HOOK_METRICS)  # type: ignore[attr-defined]
-        assert hook_metrics["serving_hook_returned_original"] is True
+        assert hook_metrics["serving_hook_returned_original"] is False
+        assert hook_metrics["serving_hook_replaced_count"] >= 1
+        assert hook_metrics["serving_hook_mode"] == "native_tc_adapter"
+        assert hook_metrics["serving_hook_replacement_real"] is True
         assert hook_metrics["serving_hook_fallback_count"] == 0
         assert hook_metrics["tc_native_consumed"] is True
+        assert hook_metrics["tc_native_consumed_coalesced_groups"] is True
+        assert hook_metrics["tc_native_descriptor_count"] == 8
+        assert hook_metrics["tc_native_entrypoint"] == "tilepo_cuda_dispatch_coalesced_gemm"
+        assert hook_metrics["tc_native_descriptor_layout"] == "tilepo_cuda_coalesced_group_desc_v1"
         sglang_hook.reset_for_tests()
 
         runtime = TileMEMRuntime(manifests["tilepo_fine"], {}, mode=RuntimeMode.SERVE)

@@ -73,7 +73,7 @@ def main() -> int:
         _assert_v0_2_requires_strict_win(root)
         _assert_v0_2_requires_native_tc_descriptor_evidence(root)
         _assert_v0_2_requires_native_tc_consumption(root)
-        _assert_v0_2_preserves_kt_output(root)
+        _assert_v0_2_requires_native_tc_adapter_path(root)
         _assert_v0_2_rejects_masked_fallback_counters(root)
         _assert_v0_2_requires_runtime_efficiency_evidence(root)
         _assert_v0_2_requires_measured_runtime_metric_provenance(root)
@@ -82,10 +82,14 @@ def main() -> int:
         _assert_real_failed_row_writes_blocked_manifest(root)
         _assert_bench_failure_exits_nonzero(root)
         _assert_offline_runner_preflight_is_local_only(root)
+        _assert_reproduction_scripts_wire_strict_native_tc_offline_acceptance()
+        _assert_reproduction_scripts_wire_repeats()
         _assert_offline_runner_wires_resume()
         _assert_v0_2_offline_packager_writes_required_entrypoint()
         _assert_sweep_uses_local_bench_and_disables_windows_host_guard(root)
         _assert_sweep_uses_kt_preserving_native_tc_for_v0_2(root)
+        _assert_self_ablation_preserves_kt_optimizations_consistently(root)
+        _assert_bootstrap_prime_does_not_count_as_measured_replacement()
         _assert_sweep_wires_force_prompt_for_focused_restore(root)
         _assert_windows_host_guard_collection_is_bounded()
         _assert_runtime_env_limits_compile_parallelism(root)
@@ -240,12 +244,12 @@ def _assert_v0_2_requires_native_tc_consumption(root: Path) -> None:
     assert "missing V0.2 native TC consumption evidence" in proc.stderr
 
 
-def _assert_v0_2_preserves_kt_output(root: Path) -> None:
+def _assert_v0_2_requires_native_tc_adapter_path(root: Path) -> None:
     rows = _rows()
     for row in rows:
         if row["tilepo_policy"] == "tilepo_atg_tc_baa" and row["workload"] == "mixed" and row["experts_per_layer"] == 8:
-            row["serving_hook_replaced_count"] = 1
-            row["serving_hook_returned_original"] = False
+            row["serving_hook_replaced_count"] = 0
+            row["serving_hook_returned_original"] = True
             row["serving_hook_fallback_count"] = 1
             row["plain_kt_fallback_events"] = 1
             break
@@ -269,8 +273,8 @@ def _assert_v0_2_preserves_kt_output(root: Path) -> None:
         check=False,
     )
     assert proc.returncode != 0
-    assert "V0.2 did not preserve KT/SGLang output" in proc.stderr
-    assert "V0.2 unexpectedly replaced KT/SGLang output" in proc.stderr
+    assert "V0.2 native TC did not replace the measured serving path" in proc.stderr
+    assert "V0.2 native TC replacement count is zero" in proc.stderr
 
 
 def _assert_v0_2_rejects_masked_fallback_counters(root: Path) -> None:
@@ -606,8 +610,12 @@ def _assert_offline_runner_preflight_is_local_only(root: Path) -> None:
             "bash",
             str(ROOT / "scripts" / "run_adaptive_granularity_offline.sh"),
             "--preflight-only",
+            "--execute",
+            "--strict-native-tc",
+            "--offline-acceptance",
             "--ignore-active-run",
             "--skip-gpu-check",
+            "--skip-quick-verify",
             "--model-dir",
             str(model_dir),
             "--init-expert-location",
@@ -630,8 +638,13 @@ def _assert_offline_runner_preflight_is_local_only(root: Path) -> None:
     payload = json.loads(proc.stdout)
     assert payload["schema_version"] == "tilemem_adaptive_offline_preflight_v1"
     assert payload["status"] == "passed"
+    assert payload["strict_native_tc"] is True
+    assert payload["offline_acceptance"] is True
+    assert payload["native_tc_preflight"]["tc_native_consumed_coalesced_groups"] is True
+    assert payload["native_tc_preflight"]["tc_native_descriptor_count"] == 8
     assert payload["offline_env"]["HF_HUB_OFFLINE"] == "1"
-    assert payload["execute"] is False
+    assert payload["offline_env"]["TILEPO_DISABLE_NETWORK"] == "1"
+    assert payload["execute"] is True
     assert payload["preflight_only"] is True
 
 
@@ -695,6 +708,35 @@ def _assert_sweep_uses_local_bench_and_disables_windows_host_guard(root: Path) -
     assert command[vmmem_index + 1] == "0"
 
 
+def _assert_reproduction_scripts_wire_strict_native_tc_offline_acceptance() -> None:
+    offline = (ROOT / "scripts" / "run_adaptive_granularity_offline.sh").read_text()
+    reproduce = (ROOT / "scripts" / "reproduce_adaptive_granularity.sh").read_text()
+    for script in (offline, reproduce):
+        assert "--strict-native-tc" in script
+        assert "--offline-acceptance" in script
+        assert "TILEPO_STRICT_NATIVE_TC" in script
+        assert "TILEPO_OFFLINE_ACCEPTANCE" in script
+        assert "tc_native_consumed_coalesced_groups" in script
+    assert "HF_HUB_OFFLINE=1" in offline
+    assert "TRANSFORMERS_OFFLINE=1" in offline
+    assert "HF_DATASETS_OFFLINE=1" in offline
+    assert "TILEPO_DISABLE_NETWORK=1" in offline
+
+
+def _assert_reproduction_scripts_wire_repeats() -> None:
+    offline = (ROOT / "scripts" / "run_adaptive_granularity_offline.sh").read_text()
+    reproduce = (ROOT / "scripts" / "reproduce_adaptive_granularity.sh").read_text()
+    report = (ROOT / "tilepo" / "reporting" / "adaptive_granularity.py").read_text()
+    for script in (offline, reproduce):
+        assert "--repeats" in script
+        assert "REPEATS" in script
+    assert "command+=(--repeats \"$REPEATS\")" in offline
+    assert "TILEMEM_ADAPTIVE_REPEATS" in reproduce
+    assert "repeats=repeats" in reproduce
+    assert '"repeats": repeats' in reproduce
+    assert "expected_rows = len(workloads) * len(experts) * len(policies) * repeats" in report
+
+
 def _assert_sweep_uses_kt_preserving_native_tc_for_v0_2(root: Path) -> None:
     from tilepo import env as tilepo_env
     from tilepo.sweep import build_tilepo_bench_command
@@ -747,6 +789,76 @@ def _assert_sweep_uses_kt_preserving_native_tc_for_v0_2(root: Path) -> None:
     fixed_command = fixed_run["command"]
     assert f"{tilepo_env.TILEPO_REQUIRE_NATIVE_BACKEND}=1" not in fixed_command
     assert f"{tilepo_env.TILEPO_SERVE_REPLACE}=1" not in fixed_command
+
+
+def _assert_self_ablation_preserves_kt_optimizations_consistently(root: Path) -> None:
+    from tilepo.sweep import build_tilepo_bench_command
+
+    local_bench = ROOT / "tools" / "openai_varprompt_bench"
+    common = {
+        "workload": "mixed",
+        "repeat": 0,
+        "experts": 8,
+        "system": "C",
+        "model_dir": "/local/model",
+        "init_path": "/local/hotset.pt",
+        "tilepo_manifest_path": "/local/plan.manifest.json",
+        "mode": "verify",
+        "bench_tool": local_bench,
+        "repo_root": ROOT,
+        "kt_env": "fake-kt-env",
+        "request_count": 1,
+        "warmup_request_count": 0,
+        "output_tokens": 8,
+        "async_planning_mode": "on",
+    }
+    fixed = build_tilepo_bench_command(
+        out_dir=root / "fixed_same_shell",
+        port=35200,
+        ablation_policy="tilepo_fine",
+        **common,
+    )
+    v2 = build_tilepo_bench_command(
+        out_dir=root / "v2_same_shell",
+        port=35201,
+        ablation_policy="tilepo_atg_tc_baa",
+        **common,
+    )
+    disabled_flags = {
+        "--skip-server-warmup",
+        "--disable-radix-cache",
+        "--disable-overlap-schedule",
+        "--disable-cuda-graph",
+        "--disable-shared-experts-fusion",
+    }
+    fixed_flags = disabled_flags.intersection(fixed["server_command"])
+    v2_flags = disabled_flags.intersection(v2["server_command"])
+    assert fixed_flags == v2_flags == disabled_flags
+
+
+def _assert_bootstrap_prime_does_not_count_as_measured_replacement() -> None:
+    from tilepo.kt_patch.bootstrap import _merge_native_tc_prime_into_hook
+
+    merged = _merge_native_tc_prime_into_hook(
+        {"installed": True, "serving_hook_replaced_count": 0},
+        {
+            "tc_native_consumed": True,
+            "tc_native_consumed_coalesced_groups": True,
+            "tc_native_descriptor_count": 8,
+            "tc_native_entrypoint": "tilepo_cuda_dispatch_coalesced_gemm",
+            "tc_native_descriptor_layout": "tilepo_cuda_coalesced_group_desc_v1",
+            "tc_native_consumed_group_count": 8,
+            "tc_native_consumed_tile_count": 16384,
+            "tc_native_consumed_bytes": 8589934592,
+            "tc_native_consumption_source": "kt_grouped_moe_cuda_adapter",
+        },
+    )
+    assert merged["serving_hook_replaced_count"] == 0
+    assert merged["serving_hook_returned_original"] is True
+    assert merged["serving_hook_mode"] == "observe_only"
+    assert merged["tc_native_consumed"] is True
+    assert merged["tc_native_descriptor_count"] == 8
+    assert merged["serving_hook_backend_prime_native_ready"] is True
 
 
 def _assert_sweep_wires_force_prompt_for_focused_restore(root: Path) -> None:
@@ -972,9 +1084,11 @@ def _row(
         row["tc_native_launch_count"] = 1
         row["serving_hook_active"] = True
         row["serving_hook_invocations"] = 1
-        row["serving_hook_replaced_count"] = 0
+        row["serving_hook_replaced_count"] = 1
         row["serving_hook_fallback_count"] = 0
-        row["serving_hook_returned_original"] = True
+        row["serving_hook_returned_original"] = False
+        row["serving_hook_mode"] = "native_tc_adapter"
+        row["serving_hook_replacement_real"] = True
         row["serving_hook_verify_count"] = 1
         row["serving_hook_verify_pass_count"] = 1
         row["serving_hook_verify_fail_count"] = 0

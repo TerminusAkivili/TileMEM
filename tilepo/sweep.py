@@ -20,7 +20,6 @@ DEFAULT_INIT = "/mnt/d/tilemem_runtime/results/kt_tilemem_hotset_20260523/tileme
 DEFAULT_KT_ENV = "tilemem-tilepo-ktransformers"
 DEFAULT_BENCH_TOOL_CANDIDATES = [
     Path("tools/openai_varprompt_bench"),
-    Path("/home/baobao/TileMEM/tools/openai_varprompt_bench"),
 ]
 C_MODE_CHOICES = ("hook", "kt_native")
 
@@ -48,13 +47,14 @@ def run_sweep(
     startup_timeout_sec: int = 900,
     min_c_free_gib: float = 20.0,
     min_d_free_gib: float = 20.0,
-    max_host_commit_percent: float = 95.0,
+    max_host_commit_percent: float = 100.0,
     max_vmmem_gib: float = 0.0,
     min_linux_available_gib: float = 8.0,
     skip_existing_success: bool = False,
     c_mode: str = "hook",
     ablation_policy: str = "",
     async_planning_mode: str = "",
+    force_prompt: str = "",
 ) -> dict[str, Any]:
     _validate_c_mode(c_mode)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -167,6 +167,7 @@ def run_sweep(
         c_mode=c_mode,
         ablation_policy=ablation_policy,
         async_planning_mode=async_planning_mode,
+        force_prompt=force_prompt,
     )
 
     if execute:
@@ -194,7 +195,59 @@ def run_sweep(
                     async_planning_mode=async_planning_mode,
                 )
                 continue
-            subprocess.run(run["command"], cwd=Path(__file__).resolve().parents[1], env=os.environ.copy(), check=True)
+            try:
+                subprocess.run(
+                    run["command"],
+                    cwd=Path(__file__).resolve().parents[1],
+                    env=os.environ.copy(),
+                    check=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                blocker = _command_failure_blocker(run, exc)
+                _write_sweep_checkpoint(
+                    manifest_path,
+                    mode=mode,
+                    c_mode=c_mode,
+                    simulated=False,
+                    env=env,
+                    compile_result=compile_result,
+                    selected_systems=selected_systems,
+                    selected_workloads=selected_workloads,
+                    selected_experts=selected_experts,
+                    repeats=repeats,
+                    command_runs=command_runs,
+                    skipped_existing_runs=skipped_existing_runs,
+                    c_init_path=c_init_path,
+                    ablation_policy=ablation_policy,
+                    async_planning_mode=async_planning_mode,
+                    blocked=True,
+                    blockers=[blocker],
+                    failed_command_run=_failed_command_run(run, exc),
+                )
+                return {"manifest_path": str(manifest_path), "blocked": True, "blockers": [blocker]}
+            row_failure = _raw_row_failure_blocker(run)
+            if row_failure:
+                _write_sweep_checkpoint(
+                    manifest_path,
+                    mode=mode,
+                    c_mode=c_mode,
+                    simulated=False,
+                    env=env,
+                    compile_result=compile_result,
+                    selected_systems=selected_systems,
+                    selected_workloads=selected_workloads,
+                    selected_experts=selected_experts,
+                    repeats=repeats,
+                    command_runs=command_runs,
+                    skipped_existing_runs=skipped_existing_runs,
+                    c_init_path=c_init_path,
+                    ablation_policy=ablation_policy,
+                    async_planning_mode=async_planning_mode,
+                    blocked=True,
+                    blockers=[row_failure],
+                    failed_command_run=_failed_row_command_run(run),
+                )
+                return {"manifest_path": str(manifest_path), "blocked": True, "blockers": [row_failure]}
             _write_sweep_checkpoint(
                 manifest_path,
                 mode=mode,
@@ -252,6 +305,7 @@ def run_sweep(
         "command_runs": command_runs,
         "skipped_existing_runs": skipped_existing_runs,
         "runs": rows,
+        "actual_result_rows": len(rows),
         "created_at_unix": time.time(),
         "checkpoint": False,
     }
@@ -276,6 +330,7 @@ def build_kt_sglang_server_command(
     tilepo_manifest_path: str,
     mode: str,
     kt_env: str = DEFAULT_KT_ENV,
+    preserve_kt_optimizations: bool = False,
 ) -> list[str]:
     strategy = "uniform" if system == "A" else "frequency"
     cmd = [
@@ -325,15 +380,16 @@ def build_kt_sglang_server_command(
     ]
     if system in {"B", "C"}:
         cmd.extend(["--init-expert-location", init_path])
-    cmd.extend(
-        [
-            "--skip-server-warmup",
-            "--disable-radix-cache",
-            "--disable-overlap-schedule",
-            "--disable-cuda-graph",
-            "--disable-shared-experts-fusion",
-        ]
-    )
+    if not preserve_kt_optimizations:
+        cmd.extend(
+            [
+                "--skip-server-warmup",
+                "--disable-radix-cache",
+                "--disable-overlap-schedule",
+                "--disable-cuda-graph",
+                "--disable-shared-experts-fusion",
+            ]
+        )
     return cmd
 
 
@@ -359,12 +415,13 @@ def build_tilepo_bench_command(
     startup_timeout_sec: int = 900,
     min_c_free_gib: float = 20.0,
     min_d_free_gib: float = 20.0,
-    max_host_commit_percent: float = 95.0,
+    max_host_commit_percent: float = 100.0,
     max_vmmem_gib: float = 0.0,
     min_linux_available_gib: float = 8.0,
     c_mode: str = "hook",
     ablation_policy: str = "",
     async_planning_mode: str = "",
+    force_prompt: str = "",
 ) -> dict[str, Any]:
     _validate_c_mode(c_mode)
     system_name = {"A": "kt_uniform", "B": "kt_tilemem_placement", "C": "kt_sglang_tilepo"}[system]
@@ -392,12 +449,14 @@ def build_tilepo_bench_command(
         tilepo_manifest_path=tilepo_manifest_path,
         mode=mode,
         kt_env=kt_env,
+        preserve_kt_optimizations=False,
     )
     run_id = f"{run_name}-{uuid.uuid4().hex}"
     extra_env = []
     if system == "C" and c_mode == "hook":
         marker = out_dir / "raw" / f"{run_name}.tilepo_bootstrap.json"
         pythonpath = os.pathsep.join([str(repo_root), str(bench_tool.resolve().parents[1])])
+        is_v0_2_policy = ablation_policy == "tilepo_atg_tc_baa"
         extra_env = [
             "--extra-env",
             f"{tilepo_env.TILEPO_ENABLE}=1",
@@ -416,8 +475,27 @@ def build_tilepo_bench_command(
             "--extra-env",
             f"{tilepo_env.TILEPO_ASYNC_PLANNING}={async_planning_mode}",
             "--extra-env",
+            f"{tilepo_env.TILEPO_HOOK_VERIFY_LIMIT}=1",
+            "--extra-env",
+            f"{tilepo_env.TILEPO_HOOK_FLUSH_INTERVAL}=4096",
+            "--extra-env",
             f"PYTHONPATH={pythonpath}",
         ]
+        if is_v0_2_policy:
+            extra_env.extend(
+                [
+                    "--extra-env",
+                    f"{tilepo_env.TILEPO_REQUIRE_NATIVE_BACKEND}=1",
+                    "--extra-env",
+                    f"{tilepo_env.TILEPO_HOOK_BACKEND_PROBE_LIMIT}=1",
+                ]
+            )
+    prompt_args = ["--prompts-file", str(prompts_file)]
+    if force_prompt:
+        prompt_args = []
+        for _ in range(max(request_count + warmup_request_count, 0)):
+            prompt_args.extend(["--prompt", force_prompt])
+
     command = [
         "python3",
         str(bench_tool),
@@ -449,8 +527,7 @@ def build_tilepo_bench_command(
         "real",
         "--port",
         str(port),
-        "--prompts-file",
-        str(prompts_file),
+        *prompt_args,
         "--runtime-dir",
         str(runtime_dir),
         "--native-tmp-dir",
@@ -490,6 +567,7 @@ def build_tilepo_bench_command(
         "async_planning_mode": async_planning_mode,
         "tilepo_policy": ablation_policy,
         "tilepo_async_planning": async_planning_mode,
+        "force_prompt": force_prompt,
     }
 
 
@@ -564,6 +642,7 @@ def _command_runs(
     c_mode: str,
     ablation_policy: str,
     async_planning_mode: str,
+    force_prompt: str,
 ) -> list[dict[str, Any]]:
     runs = []
     port = base_port
@@ -599,6 +678,7 @@ def _command_runs(
                             c_mode=c_mode,
                             ablation_policy=ablation_policy,
                             async_planning_mode=async_planning_mode,
+                            force_prompt=force_prompt,
                         )
                     )
                     port += 1
@@ -699,73 +779,355 @@ def _load_real_rows(command_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 row["cpu_ram_peak_gib"] = float(row.get("cpu_memory_peak_bytes", 0.0)) / (1024 ** 3)
                 row["server_ready_s"] = row.get("server_ready_after_sec", 0.0)
                 hot_probe = _load_hot_backend_probe(run, path)
-                if hot_probe:
-                    row["hot_backend_probe_path"] = hot_probe["path"]
-                    row["hot_backend_probe_status"] = hot_probe.get("status", "unknown")
-                    if "failure_reason" in hot_probe:
-                        row["hot_backend_probe_failure_reason"] = hot_probe["failure_reason"]
-                row["runtime_overhead_us"] = row.get(
-                    "runtime_overhead_us", hot_probe.get("runtime_overhead_us", 0.0)
-                )
-                for key in (
-                    "plan_lookup_us",
-                    "plan_lookup_total_us",
-                    "gate_us",
-                    "backend_launch_us",
-                    "h2d_bytes",
-                    "cache_hits",
-                    "cache_misses",
-                    "tile_count",
-                    "async_plan_cache_hits",
-                    "async_plan_cache_misses",
-                ):
-                    if key not in row and key in hot_probe:
-                        row[key] = hot_probe[key]
-                row["dtype_counts"] = row.get("dtype_counts", hot_probe.get("dtype_counts", {"bf16": 1}))
-                row["fallback_count"] = row.get("fallback_count", hot_probe.get("fallback_count", 0))
-                row["backend_launch_counts"] = row.get(
-                    "backend_launch_counts", hot_probe.get("backend_launch_counts", {})
-                )
-                row["tilemem_backend_launch_count"] = row.get(
-                    "tilemem_backend_launch_count", hot_probe.get("tilemem_backend_launch_count", 0)
-                )
-                if "hot_backend_native" not in row and "hot_backend_native" in hot_probe:
-                    row["hot_backend_native"] = bool(hot_probe["hot_backend_native"])
-                serving_hook = hot_probe.get("serving_hook", {})
-                if isinstance(serving_hook, dict):
-                    for key in (
-                        "serving_hook_active",
-                        "serving_hook_invocations",
-                        "serving_hook_replaced_count",
-                        "serving_hook_fallback_count",
-                        "serving_hook_last_layer",
-                        "serving_hook_last_shape",
-                        "serving_hook_last_target",
-                        "serving_hook_returned_original",
-                        "serving_hook_replacement_blocked_reason",
-                        "serving_hook_backend_launch_count",
-                        "serving_hook_backend_launch_counts",
-                        "serving_hook_backend_fallback_count",
-                        "serving_hook_backend_dtype_counts",
-                        "serving_hook_backend_h2d_bytes",
-                        "serving_hook_backend_runtime_us",
-                        "serving_hook_backend_result",
-                        "serving_hook_backend_hot_tile",
-                        "serving_hook_backend_launch_failure",
-                        "serving_hook_verify_count",
-                        "serving_hook_verify_pass_count",
-                        "serving_hook_verify_fail_count",
-                        "serving_hook_verify_max_abs_error",
-                        "serving_hook_verify_shape_match",
-                        "serving_hook_verify_dtype_match",
-                        "serving_hook_verify_device_match",
-                        "serving_hook_verify_source",
-                        "serving_hook_candidate_available",
-                    ):
-                        if key in serving_hook and key not in row:
-                            row[key] = serving_hook[key]
+                _merge_hot_backend_probe(row, hot_probe)
+                _attach_v2_execution_evidence(row)
                 rows.append(row)
     return rows
+
+
+def _attach_v2_execution_evidence(row: dict[str, Any]) -> None:
+    if row.get("tilepo_policy") != "tilepo_atg_tc_baa":
+        return
+    row.setdefault("backend_owner", "kt_sglang")
+    row.setdefault("kt_executor_preserved", _bool_value(row.get("serving_hook_returned_original")))
+    row.setdefault("tilepo_plan_applied_in_serving_path", _tilepo_plan_applied_in_serving_path(row))
+    row.setdefault("tc_coalescing_active", _tc_coalescing_active(row))
+    row.setdefault("baa_double_buffered", _bool_value(row.get("baa_double_buffered")))
+    if row.get("unexpected_plain_kt_bypass_events") is None:
+        fallback_keys = ("fallback_count", "serving_hook_backend_fallback_count", "kt_fallback_count", "baa_fallback_count")
+        if any(key in row for key in fallback_keys):
+            row["unexpected_plain_kt_bypass_events"] = sum(int(row.get(key, 0) or 0) for key in fallback_keys)
+    if "execution_dispatch_units" not in row and "serving_hook_backend_execution_dispatch_units" in row:
+        row["execution_dispatch_units"] = row["serving_hook_backend_execution_dispatch_units"]
+    if "coalesced_group_count" not in row and "serving_hook_backend_coalesced_group_count" in row:
+        row["coalesced_group_count"] = row["serving_hook_backend_coalesced_group_count"]
+    if "baa_critical_path_us" not in row and "serving_hook_backend_baa_critical_path_us" in row:
+        row["baa_critical_path_us"] = row["serving_hook_backend_baa_critical_path_us"]
+    if "baa_metrics_measured" not in row and "serving_hook_backend_baa_metrics_measured" in row:
+        row["baa_metrics_measured"] = row["serving_hook_backend_baa_metrics_measured"]
+    if "cuda_descriptor_traversal_us" not in row and "serving_hook_backend_cuda_descriptor_traversal_us" in row:
+        row["cuda_descriptor_traversal_us"] = row["serving_hook_backend_cuda_descriptor_traversal_us"]
+    if "cuda_descriptor_metrics_measured" not in row and "serving_hook_backend_cuda_descriptor_metrics_measured" in row:
+        row["cuda_descriptor_metrics_measured"] = row["serving_hook_backend_cuda_descriptor_metrics_measured"]
+    if "tc_native_consumed" not in row and "serving_hook_backend_tc_native_consumed" in row:
+        row["tc_native_consumed"] = row["serving_hook_backend_tc_native_consumed"]
+    if "tc_native_consumed_coalesced_groups" not in row and "serving_hook_backend_tc_native_consumed_coalesced_groups" in row:
+        row["tc_native_consumed_coalesced_groups"] = row["serving_hook_backend_tc_native_consumed_coalesced_groups"]
+    for key in (
+        "tc_native_consumed_group_count",
+        "tc_native_descriptor_count",
+        "tc_native_consumed_tile_count",
+        "tc_native_consumed_bytes",
+        "tc_native_launch_count",
+        "tc_adapter_group_count",
+        "tc_adapter_descriptor_count",
+        "tc_adapter_tile_count",
+        "tc_adapter_dispatch_units",
+    ):
+        hook_key = f"serving_hook_backend_{key}"
+        if key not in row and hook_key in row:
+            row[key] = row[hook_key]
+    for key in (
+        "tc_native_entrypoint",
+        "tc_native_descriptor_layout",
+        "tc_native_consumption_source",
+        "tc_native_launch_path",
+        "tc_adapter_source",
+        "tc_adapter_target",
+        "tc_adapter_mode",
+        "tc_adapter_fallback_reason",
+    ):
+        hook_key = f"serving_hook_backend_{key}"
+        if key not in row and hook_key in row:
+            row[key] = row[hook_key]
+    if "tc_adapter_consumed" not in row and "serving_hook_backend_tc_adapter_consumed" in row:
+        row["tc_adapter_consumed"] = row["serving_hook_backend_tc_adapter_consumed"]
+    for key, hook_key in (
+        ("tc_adapter_group_count", "serving_hook_backend_tc_adapter_group_count"),
+        ("tc_adapter_descriptor_count", "serving_hook_backend_tc_adapter_descriptor_count"),
+        ("tc_adapter_tile_count", "serving_hook_backend_tc_adapter_tile_count"),
+        ("tc_adapter_dispatch_units", "serving_hook_backend_tc_adapter_dispatch_units"),
+        ("tc_adapter_source", "serving_hook_backend_tc_adapter_source"),
+        ("tc_adapter_target", "serving_hook_backend_tc_adapter_target"),
+        ("tc_adapter_mode", "serving_hook_backend_tc_adapter_mode"),
+        ("tc_adapter_fallback_reason", "serving_hook_backend_tc_adapter_fallback_reason"),
+    ):
+        if key not in row and hook_key in row:
+            row[key] = row[hook_key]
+    if _bool_value(row.get("tc_native_consumed")):
+        row["runtime_metrics_source"] = row.get("runtime_metrics_source") or "kt_preserving_native_tc_kernel"
+    row.setdefault("runtime_metrics_source", "kt_preserving_hook")
+    hook_counts = row.get("serving_hook_backend_launch_counts")
+    if isinstance(hook_counts, dict) and "cuda_launch_count" not in row:
+        row["cuda_launch_count"] = int(hook_counts.get("cuda", 0) or 0)
+    if "cuda_launch_count" not in row and "backend_launch_counts" in row:
+        counts = row.get("backend_launch_counts")
+        if isinstance(counts, dict):
+            row["cuda_launch_count"] = int(counts.get("cuda", 0) or 0)
+    row["tilepo_backend"] = _row_tilepo_backend(row)
+    blockers = _v0_2_runtime_blockers(row)
+    row["v0_2_runtime_status"] = "ready" if not blockers else "blocked"
+    row["v0_2_runtime_blockers"] = blockers
+
+
+_HOT_PROBE_ROW_KEYS = (
+    "kt_executor_preserved",
+    "tilepo_plan_applied_in_serving_path",
+    "tc_coalescing_active",
+    "plan_lookup_us",
+    "plan_lookup_total_us",
+    "gate_us",
+    "backend_launch_us",
+    "h2d_bytes",
+    "cache_hits",
+    "cache_misses",
+    "tile_count",
+    "coalesced_group_count",
+    "execution_dispatch_units",
+    "baa_double_buffered",
+    "baa_critical_path_us",
+    "baa_active_map_id",
+    "baa_standby_ready",
+    "baa_metrics_measured",
+    "cuda_launch_count",
+    "native_cuda_available",
+    "native_cuda_launch_count",
+    "cuda_python_shim_launch_count",
+    "cuda_descriptor_traversal_us",
+    "cuda_descriptor_metrics_measured",
+    "tc_native_consumed",
+    "tc_native_consumed_coalesced_groups",
+    "tc_native_consumed_group_count",
+    "tc_native_descriptor_count",
+    "tc_native_consumed_tile_count",
+    "tc_native_consumed_bytes",
+    "tc_native_entrypoint",
+    "tc_native_descriptor_layout",
+    "tc_native_consumption_source",
+    "tc_native_launch_path",
+    "tc_native_launch_count",
+    "runtime_metrics_source",
+    "async_plan_cache_hits",
+    "async_plan_cache_misses",
+)
+
+_SERVING_HOOK_ROW_KEYS = (
+    "serving_hook_active",
+    "serving_hook_invocations",
+    "serving_hook_replaced_count",
+    "serving_hook_fallback_count",
+    "serving_hook_last_layer",
+    "serving_hook_last_shape",
+    "serving_hook_last_target",
+    "serving_hook_returned_original",
+    "serving_hook_replacement_blocked_reason",
+    "serving_hook_backend_launch_count",
+    "serving_hook_backend_launch_counts",
+    "serving_hook_backend_launch_source",
+    "serving_hook_backend_native_cuda_available",
+    "serving_hook_backend_native_cuda_launch_count",
+    "serving_hook_backend_cuda_python_shim_launch_count",
+    "serving_hook_backend_fallback_count",
+    "serving_hook_backend_dtype_counts",
+    "serving_hook_backend_h2d_bytes",
+    "serving_hook_backend_runtime_us",
+    "serving_hook_backend_result",
+    "serving_hook_backend_hot_tile",
+    "serving_hook_backend_coalesced_group_count",
+    "serving_hook_backend_execution_dispatch_units",
+    "serving_hook_backend_baa_double_buffered",
+    "serving_hook_backend_baa_critical_path_us",
+    "serving_hook_backend_baa_metrics_measured",
+    "serving_hook_backend_cuda_descriptor_traversal_us",
+    "serving_hook_backend_cuda_descriptor_metrics_measured",
+    "serving_hook_backend_tc_native_consumed",
+    "serving_hook_backend_tc_native_consumed_coalesced_groups",
+    "serving_hook_backend_tc_native_consumed_group_count",
+    "serving_hook_backend_tc_native_descriptor_count",
+    "serving_hook_backend_tc_native_consumed_tile_count",
+    "serving_hook_backend_tc_native_consumed_bytes",
+    "serving_hook_backend_tc_native_entrypoint",
+    "serving_hook_backend_tc_native_descriptor_layout",
+    "serving_hook_backend_tc_native_consumption_source",
+    "serving_hook_backend_tc_native_launch_path",
+    "serving_hook_backend_tc_native_launch_count",
+    "serving_hook_backend_tc_adapter_consumed",
+    "serving_hook_backend_tc_adapter_source",
+    "serving_hook_backend_tc_adapter_group_count",
+    "serving_hook_backend_tc_adapter_descriptor_count",
+    "serving_hook_backend_tc_adapter_tile_count",
+    "serving_hook_backend_tc_adapter_dispatch_units",
+    "serving_hook_backend_tc_adapter_target",
+    "serving_hook_backend_tc_adapter_mode",
+    "serving_hook_backend_tc_adapter_fallback_reason",
+    "serving_hook_backend_launch_failure",
+    "serving_hook_mode",
+    "serving_hook_replacement_real",
+    "serving_hook_verify_count",
+    "serving_hook_verify_pass_count",
+    "serving_hook_verify_fail_count",
+    "serving_hook_verify_max_abs_error",
+    "serving_hook_verify_shape_match",
+    "serving_hook_verify_dtype_match",
+    "serving_hook_verify_device_match",
+    "serving_hook_verify_source",
+    "serving_hook_candidate_available",
+)
+
+
+def _merge_hot_backend_probe(row: dict[str, Any], hot_probe: dict[str, Any]) -> None:
+    if not hot_probe:
+        row.setdefault("runtime_overhead_us", 0.0)
+        row.setdefault("dtype_counts", {"bf16": 1})
+        row.setdefault("fallback_count", 0)
+        row.setdefault("backend_launch_counts", {})
+        row.setdefault("tilemem_backend_launch_count", 0)
+        return
+    row["hot_backend_probe_path"] = hot_probe.get("path", row.get("hot_backend_probe_path", ""))
+    row["hot_backend_probe_status"] = hot_probe.get("status", "unknown")
+    if "failure_reason" in hot_probe:
+        row["hot_backend_probe_failure_reason"] = hot_probe["failure_reason"]
+    row["runtime_overhead_us"] = row.get("runtime_overhead_us", hot_probe.get("runtime_overhead_us", 0.0))
+    for key in _HOT_PROBE_ROW_KEYS:
+        if key not in row and key in hot_probe:
+            row[key] = hot_probe[key]
+    row["dtype_counts"] = row.get("dtype_counts", hot_probe.get("dtype_counts", {"bf16": 1}))
+    row["fallback_count"] = row.get("fallback_count", hot_probe.get("fallback_count", 0))
+    row["backend_launch_counts"] = row.get("backend_launch_counts", hot_probe.get("backend_launch_counts", {}))
+    row["tilemem_backend_launch_count"] = row.get(
+        "tilemem_backend_launch_count",
+        hot_probe.get("tilemem_backend_launch_count", 0),
+    )
+    if "hot_backend_native" not in row and "hot_backend_native" in hot_probe:
+        row["hot_backend_native"] = bool(hot_probe["hot_backend_native"])
+    serving_hook = hot_probe.get("serving_hook", {})
+    if isinstance(serving_hook, dict):
+        for key in _SERVING_HOOK_ROW_KEYS:
+            if key in serving_hook and key not in row:
+                row[key] = serving_hook[key]
+
+
+def _tilepo_plan_applied_in_serving_path(row: dict[str, Any]) -> bool:
+    return (
+        _bool_value(row.get("serving_hook_active"))
+        and int(row.get("serving_hook_invocations", 0) or 0) > 0
+        and (
+            row.get("tilepo_plan") is not None
+            or int(row.get("tile_count", 0) or 0) > 0
+            or int(row.get("execution_dispatch_units", 0) or 0) > 0
+        )
+    )
+
+
+def _tc_coalescing_active(row: dict[str, Any]) -> bool:
+    if _bool_value(row.get("tc_coalescing_active")):
+        return True
+    if int(row.get("coalesced_group_count", 0) or 0) > 0:
+        return True
+    dispatch_units = int(row.get("execution_dispatch_units", 0) or 0)
+    tile_count = int(row.get("tile_count", 0) or 0)
+    return tile_count > 0 and dispatch_units > 0 and dispatch_units < tile_count
+
+
+def _v0_2_runtime_blockers(row: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    if not _bool_value(row.get("serving_hook_active")):
+        blockers.append("serving hook is not active")
+    if int(row.get("serving_hook_invocations", 0) or 0) <= 0:
+        blockers.append("serving hook was not invoked")
+    if not _bool_value(row.get("kt_executor_preserved")):
+        blockers.append("KT/SGLang serving shell preservation evidence is missing")
+    if _bool_value(row.get("serving_hook_returned_original", True)):
+        blockers.append("V0.2 native TC did not replace the measured serving path")
+    if int(row.get("serving_hook_replaced_count", 0) or 0) <= 0:
+        blockers.append("V0.2 native TC replacement count is zero")
+    if not _bool_value(row.get("tilepo_plan_applied_in_serving_path")):
+        blockers.append("TilePO plan was not applied in serving path")
+    if not _bool_value(row.get("tc_coalescing_active")):
+        blockers.append("TC coalescing evidence is missing")
+    if not _bool_value(row.get("tc_native_consumed")):
+        blockers.append("native TC consumption evidence is missing")
+    if not _bool_value(row.get("tc_native_consumed_coalesced_groups")):
+        blockers.append("native TC coalesced group consumption evidence is missing")
+    if int(row.get("tc_native_descriptor_count", 0) or 0) <= 0:
+        blockers.append("native TC descriptor count is missing")
+    elif int(row.get("tc_native_descriptor_count", 0) or 0) != 8:
+        blockers.append("native TC descriptor count is not 8")
+    if str(row.get("tc_native_entrypoint", "")) != "tilepo_cuda_dispatch_coalesced_gemm":
+        blockers.append("native TC entrypoint is not tilepo_cuda_dispatch_coalesced_gemm")
+    if str(row.get("tc_native_descriptor_layout", "")) != "tilepo_cuda_coalesced_group_desc_v1":
+        blockers.append("native TC descriptor layout is not tilepo_cuda_coalesced_group_desc_v1")
+    if int(row.get("tc_native_consumed_group_count", 0) or 0) <= 0:
+        blockers.append("native TC consumed group count is missing")
+    if str(row.get("tc_native_consumption_source", "")) not in {
+        "kt_grouped_moe_cuda_adapter",
+        "kt_serving_cuda_kernel",
+        "kt_launch_adapter_tc",
+    }:
+        blockers.append("native TC consumption source is not KT/CUDA")
+    if not _bool_value(row.get("baa_double_buffered")):
+        blockers.append("BAA double-buffer evidence is missing")
+    if int(row.get("serving_hook_verify_fail_count", 0) or 0) != 0:
+        blockers.append("KT-preserving hook verification failed")
+    if int(row.get("unexpected_plain_kt_bypass_events", row.get("fallback_count", 0)) or 0) != 0:
+        blockers.append("unexpected plain KT bypass events are nonzero")
+    if not _bool_value(row.get("baa_metrics_measured")):
+        blockers.append("BAA metrics were not measured")
+    if not _bool_value(row.get("cuda_descriptor_metrics_measured")):
+        blockers.append("CUDA descriptor metrics were not measured")
+    return blockers
+
+
+def _serving_replacement_is_real(row: dict[str, Any]) -> bool:
+    return not _v0_2_runtime_blockers(row)
+
+
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _row_v0_2_evidence_blocker(run: dict[str, Any], row: dict[str, Any]) -> str:
+    if run.get("tilepo_policy") != "tilepo_atg_tc_baa":
+        return ""
+    blockers = _v0_2_runtime_blockers(row)
+    if not blockers:
+        return ""
+    return (
+        "V0.2 row is not real native TC ATG+TC+BAA evidence: "
+        + "; ".join(blockers)
+        + f"; log={run.get('log')} jsonl={run.get('jsonl')}"
+    )
+
+
+def _row_tilepo_backend(row: dict[str, Any]) -> str:
+    if row.get("tilepo_policy") == "tilepo_atg_tc_baa" and not _serving_replacement_is_real(row):
+        return ""
+    if row.get("tilepo_policy") == "tilepo_atg_tc_baa":
+        if _bool_value(row.get("tc_native_consumed")):
+            return "kt_preserving_native_tc_cuda"
+        if _bool_value(row.get("tc_adapter_consumed")):
+            return "kt_preserving_launch_adapter_tc_cuda"
+        counts = row.get("backend_launch_counts")
+        hook_counts = row.get("serving_hook_backend_launch_counts")
+        if isinstance(hook_counts, dict) and int(hook_counts.get("cuda", 0) or 0) > 0:
+            return "kt_preserving_cuda_augmentation"
+        if isinstance(counts, dict) and int(counts.get("cuda", 0) or 0) > 0:
+            return "kt_preserving_cuda_augmentation"
+        if int(row.get("cuda_launch_count", 0) or 0) > 0:
+            return "kt_preserving_cuda_augmentation"
+    counts = row.get("backend_launch_counts")
+    hook_counts = row.get("serving_hook_backend_launch_counts")
+    if isinstance(counts, dict) and int(counts.get("cuda", 0) or 0) > 0:
+        return "cuda"
+    if isinstance(hook_counts, dict) and int(hook_counts.get("cuda", 0) or 0) > 0:
+        return "cuda"
+    return ""
 
 
 def _write_sweep_checkpoint(
@@ -785,6 +1147,9 @@ def _write_sweep_checkpoint(
     c_init_path: str | None = None,
     ablation_policy: str = "",
     async_planning_mode: str = "",
+    blocked: bool = False,
+    blockers: list[str] | None = None,
+    failed_command_run: dict[str, Any] | None = None,
 ) -> None:
     rows = _load_real_rows(command_runs)
     manifest = {
@@ -792,7 +1157,8 @@ def _write_sweep_checkpoint(
         "mode": mode,
         "c_mode": c_mode,
         "simulated": simulated,
-        "blocked": False,
+        "blocked": blocked,
+        "blockers": blockers or [],
         "environment": env,
         "compiled_manifest": str(compile_result.manifest_path),
         "serving_shell": "KT/SGLang",
@@ -809,10 +1175,117 @@ def _write_sweep_checkpoint(
         "command_runs": command_runs,
         "skipped_existing_runs": skipped_existing_runs,
         "runs": rows,
+        "actual_result_rows": len(rows),
         "created_at_unix": time.time(),
         "checkpoint": True,
     }
+    if failed_command_run is not None:
+        manifest["failed_command_run"] = failed_command_run
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+
+def _command_failure_blocker(run: dict[str, Any], exc: subprocess.CalledProcessError) -> str:
+    return (
+        f"real benchmark command failed with returncode {exc.returncode}: "
+        f"{run.get('system_name', run.get('system', 'unknown'))} "
+        f"experts={run.get('experts_per_layer')} workload={run.get('workload')} "
+        f"repeat={run.get('repeat')} log={run.get('log')} jsonl={run.get('jsonl')}"
+    )
+
+
+def _failed_command_run(run: dict[str, Any], exc: subprocess.CalledProcessError) -> dict[str, Any]:
+    return {
+        "returncode": exc.returncode,
+        "system": run.get("system"),
+        "system_name": run.get("system_name"),
+        "workload": run.get("workload"),
+        "experts_per_layer": run.get("experts_per_layer"),
+        "repeat": run.get("repeat"),
+        "jsonl": run.get("jsonl"),
+        "log": run.get("log"),
+        "plugin": run.get("plugin"),
+        "command": run.get("command"),
+        "server_command": run.get("server_command"),
+        "tilepo_policy": run.get("tilepo_policy"),
+        "tilepo_async_planning": run.get("tilepo_async_planning"),
+    }
+
+
+def _raw_row_failure_blocker(run: dict[str, Any]) -> str:
+    path = Path(run["jsonl"])
+    if not path.exists():
+        return (
+            "real benchmark command returned success but did not write jsonl: "
+            f"{run.get('system_name', run.get('system', 'unknown'))} "
+            f"experts={run.get('experts_per_layer')} workload={run.get('workload')} "
+            f"repeat={run.get('repeat')} log={run.get('log')} jsonl={run.get('jsonl')}"
+        )
+    try:
+        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    except (OSError, json.JSONDecodeError) as exc:
+        return (
+            "real benchmark command returned success but wrote unreadable jsonl: "
+            f"{exc}; log={run.get('log')} jsonl={run.get('jsonl')}"
+        )
+    if not rows:
+        return (
+            "real benchmark command returned success but wrote empty jsonl: "
+            f"log={run.get('log')} jsonl={run.get('jsonl')}"
+        )
+    for index, row in enumerate(rows):
+        _attach_run_identity(row, run)
+        if not _row_is_real_success(row):
+            status = row.get("status")
+            reason = row.get("failure_reason", "")
+            return (
+                "real benchmark command returned success but raw row is not successful real evidence: "
+                f"row={index} status={status!r} simulated={row.get('simulated')!r} "
+                f"evidence_level={row.get('evidence_level')!r} reason={reason!r} "
+                f"log={run.get('log')} jsonl={run.get('jsonl')}"
+            )
+        hot_probe = _load_hot_backend_probe(run, path)
+        if hot_probe:
+            if "hot_backend_native" in hot_probe and "hot_backend_native" not in row:
+                row["hot_backend_native"] = bool(hot_probe["hot_backend_native"])
+            serving_hook = hot_probe.get("serving_hook", {})
+            if isinstance(serving_hook, dict):
+                for key, value in serving_hook.items():
+                    row.setdefault(key, value)
+        _attach_v2_execution_evidence(row)
+        v0_2_blocker = _row_v0_2_evidence_blocker(run, row)
+        if v0_2_blocker:
+            return v0_2_blocker
+    return ""
+
+
+def _failed_row_command_run(run: dict[str, Any]) -> dict[str, Any]:
+    record = {
+        "returncode": 0,
+        "system": run.get("system"),
+        "system_name": run.get("system_name"),
+        "workload": run.get("workload"),
+        "experts_per_layer": run.get("experts_per_layer"),
+        "repeat": run.get("repeat"),
+        "jsonl": run.get("jsonl"),
+        "log": run.get("log"),
+        "plugin": run.get("plugin"),
+        "command": run.get("command"),
+        "server_command": run.get("server_command"),
+        "tilepo_policy": run.get("tilepo_policy"),
+        "tilepo_async_planning": run.get("tilepo_async_planning"),
+    }
+    path = Path(run["jsonl"])
+    try:
+        rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    except (OSError, json.JSONDecodeError):
+        rows = []
+    if rows:
+        row = rows[0]
+        record["row_status"] = row.get("status")
+        record["row_failure_reason"] = row.get("failure_reason", "")
+        record["row_evidence_level"] = row.get("evidence_level")
+        record["row_simulated"] = row.get("simulated")
+    return record
 
 
 def _mark_existing_success(run: dict[str, Any]) -> bool:
@@ -827,6 +1300,14 @@ def _mark_existing_success(run: dict[str, Any]) -> bool:
         return False
     if not all(_row_is_real_success(row) for row in rows):
         return False
+    if run.get("tilepo_policy") == "tilepo_atg_tc_baa":
+        for row in rows:
+            _attach_run_identity(row, run)
+            hot_probe = _load_hot_backend_probe(run, path, allow_stale_run_id=True)
+            _merge_hot_backend_probe(row, hot_probe)
+            _attach_v2_execution_evidence(row)
+            if _row_v0_2_evidence_blocker(run, row):
+                return False
     marker_path = path.with_suffix(".tilepo_bootstrap.json")
     if marker_path.exists():
         try:
@@ -840,6 +1321,19 @@ def _mark_existing_success(run: dict[str, Any]) -> bool:
     return True
 
 
+def _attach_run_identity(row: dict[str, Any], run: dict[str, Any]) -> None:
+    row.setdefault("experts_per_layer", run.get("experts_per_layer"))
+    row.setdefault("repeat", run.get("repeat"))
+    row.setdefault("workload", run.get("workload"))
+    row.setdefault("ablation_policy", run.get("ablation_policy", ""))
+    row.setdefault("async_planning_mode", run.get("async_planning_mode", ""))
+    row.setdefault("tilepo_policy", run.get("tilepo_policy", run.get("ablation_policy", "")))
+    row.setdefault(
+        "tilepo_async_planning",
+        run.get("tilepo_async_planning", run.get("async_planning_mode", "")),
+    )
+
+
 def _row_is_real_success(row: dict[str, Any]) -> bool:
     return (
         row.get("status") == "success"
@@ -848,7 +1342,12 @@ def _row_is_real_success(row: dict[str, Any]) -> bool:
     )
 
 
-def _load_hot_backend_probe(run: dict[str, Any], jsonl_path: Path) -> dict[str, Any]:
+def _load_hot_backend_probe(
+    run: dict[str, Any],
+    jsonl_path: Path,
+    *,
+    allow_stale_run_id: bool = False,
+) -> dict[str, Any]:
     if run.get("system") != "C":
         return {}
     marker_path = jsonl_path.with_suffix(".tilepo_bootstrap.json")
@@ -860,20 +1359,37 @@ def _load_hot_backend_probe(run: dict[str, Any], jsonl_path: Path) -> dict[str, 
         return {"path": str(marker_path), "status": "unreadable"}
     expected_run_id = str(run.get("run_id", ""))
     marker_run_id = str(marker.get("run_id", ""))
-    if expected_run_id and marker_run_id != expected_run_id:
+    if expected_run_id and marker_run_id != expected_run_id and not allow_stale_run_id:
         return {
             "path": str(marker_path),
             "status": "stale_run_id",
             "expected_run_id": expected_run_id,
             "marker_run_id": marker_run_id,
         }
+    if marker_run_id and marker_run_id != expected_run_id and allow_stale_run_id:
+        run["run_id"] = marker_run_id
     probe = marker.get("hot_backend_probe")
     if not isinstance(probe, dict):
-        return {"path": str(marker_path), "status": "missing"}
-    result = {"path": str(marker_path), **probe}
+        result = {"path": str(marker_path), "status": "missing"}
+    else:
+        result = {"path": str(marker_path), **probe}
     serving_hook = marker.get("serving_hook")
     if isinstance(serving_hook, dict):
         result["serving_hook"] = serving_hook
+    for key in (
+        "kt_executor_preserved",
+        "tilepo_plan_applied_in_serving_path",
+        "tc_coalescing_active",
+        "baa_double_buffered",
+        "baa_critical_path_us",
+        "baa_metrics_measured",
+        "cuda_descriptor_metrics_measured",
+        "cuda_descriptor_traversal_us",
+        "cuda_launch_count",
+        "runtime_metrics_source",
+    ):
+        if key in marker and key not in result:
+            result[key] = marker[key]
     return result
 
 
