@@ -194,6 +194,26 @@ See [docs/tilemem_python_sdk_quickstart.md](docs/tilemem_python_sdk_quickstart.m
 - [V0.1 Priority Roadmap](docs/tilemem_tilepo_v0_1_priority_roadmap_20260611.md)
 - [V2 Execution Efficiency Roadmap](docs/tilemem_tilepo_v2_execution_efficiency_roadmap_20260613.md)
 
+## Adaptive Tile Granularity
+
+TilePO V2 adds a performance-first `tilepo_adaptive` policy. The policy is
+compiled into the manifest: hot experts stay coarse for grouped-GEMM efficiency,
+warm experts use medium/small tiles, and cold experts use fine tiles for VRAM
+admission flexibility. Runtime serving reads the manifest and does not run
+Python granularity selection on the request path.
+
+```bash
+tools/tilepo_render_plan \
+  --base-plan configs/tilepo_olmoe_bf16_only.tmem \
+  --out build/tilepo_adaptive_experts8.tmem \
+  --experts 8 \
+  --policy tilepo_adaptive \
+  --adaptive-mode throughput \
+  --async-planning on
+
+bash scripts/reproduce_adaptive_granularity.sh --execute
+```
+
 ## Production CLI
 
 For shell workflows, TileMEM ships a thin production-style CLI:

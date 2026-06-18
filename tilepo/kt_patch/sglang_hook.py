@@ -31,6 +31,13 @@ _TARGETS = (
         "KTEPWrapperMethod.apply",
         "dispatch_output",
     ),
+    (
+        "sglang.srt.models.olmoe",
+        "OlmoeMoE",
+        "forward",
+        "OlmoeMoE.forward",
+        "hidden_states",
+    ),
 )
 
 _INSTALLED = False
@@ -40,6 +47,7 @@ _HOOK_REQUEST: dict[str, Any] = {}
 _HOOK_MAX_LAUNCHES = 0
 _HOOK_LAUNCHES = 0
 _HOOK_METRICS: dict[str, Any] = {}
+_HOOK_BACKEND_EVIDENCE: dict[str, Any] = {}
 _HOOK_DIRTY = False
 _ATEXIT_REGISTERED = False
 
@@ -49,20 +57,37 @@ def configure_sglang_hook_runtime(
     request: dict[str, Any],
     max_launches: int = 1,
 ) -> None:
-    global _HOOK_RUNTIME, _HOOK_REQUEST, _HOOK_MAX_LAUNCHES, _HOOK_LAUNCHES
+    global _HOOK_RUNTIME, _HOOK_REQUEST, _HOOK_MAX_LAUNCHES, _HOOK_LAUNCHES, _HOOK_BACKEND_EVIDENCE
     _HOOK_RUNTIME = runtime
     _HOOK_REQUEST = dict(request)
     _HOOK_MAX_LAUNCHES = max(0, int(max_launches))
     _HOOK_LAUNCHES = 0
+    _HOOK_BACKEND_EVIDENCE = {}
+
+
+def prime_sglang_hook_runtime() -> dict[str, Any]:
+    """Run the bounded TC adapter probe before measured serving requests."""
+
+    global _HOOK_BACKEND_EVIDENCE
+    if _HOOK_BACKEND_EVIDENCE:
+        return _attach_kt_preserving_metadata(dict(_HOOK_BACKEND_EVIDENCE))
+    evidence = _launch_hook_runtime(
+        dispatch_output=None,
+        target_name="bootstrap_probe",
+        consume_budget=True,
+    )
+    if evidence:
+        _HOOK_BACKEND_EVIDENCE = dict(evidence)
+    return _attach_kt_preserving_metadata(dict(_HOOK_BACKEND_EVIDENCE))
 
 
 def install_sglang_hook() -> dict[str, Any]:
     """Install a conservative TilePO hook on SGLang's fused MoE core.
 
-    The hook is intentionally observe-only by default: it records that real
-    serving reached the MoE core and then returns SGLang/KT's original output.
-    Replacement is not attempted unless a future guarded path explicitly opts
-    in and proves the dispatch contract.
+    The hook records that real serving reached the MoE core. When the bounded
+    Native TC adapter proves that coalesced descriptors were consumed by the
+    backend, the marker is promoted from observe-only evidence to the measured
+    native TC adapter path.
     """
 
     global _INSTALLED
@@ -173,6 +198,8 @@ def _extract_dispatch_arg(args: tuple[Any, ...], kwargs: dict[str, Any], dispatc
         return kwargs[dispatch_arg_name]
     if not args:
         return None
+    if dispatch_arg_name == "hidden_states":
+        return {"hidden_states": args[0]}
     if dispatch_arg_name == "dispatch_output":
         return args[-1]
     return args[-1]
@@ -202,7 +229,7 @@ def _installed_attr(method_name: str) -> str:
 
 
 def reset_for_tests() -> None:
-    global _INSTALLED, _HOOK_RUNTIME, _HOOK_REQUEST, _HOOK_MAX_LAUNCHES, _HOOK_LAUNCHES, _HOOK_DIRTY
+    global _INSTALLED, _HOOK_RUNTIME, _HOOK_REQUEST, _HOOK_MAX_LAUNCHES, _HOOK_LAUNCHES, _HOOK_DIRTY, _HOOK_BACKEND_EVIDENCE
     for cls, method_name, original_attr, _target_name, original in reversed(_PATCHES):
         setattr(cls, method_name, original)
         if hasattr(cls, original_attr):
@@ -217,6 +244,7 @@ def reset_for_tests() -> None:
     _HOOK_MAX_LAUNCHES = 0
     _HOOK_LAUNCHES = 0
     _HOOK_METRICS.clear()
+    _HOOK_BACKEND_EVIDENCE = {}
     _HOOK_DIRTY = False
 
 
@@ -232,18 +260,32 @@ def _record_invocation(
     global _HOOK_DIRTY
     current = dict(_HOOK_METRICS) if _HOOK_METRICS else _initial_hook_metrics()
     invocations = int(current.get("serving_hook_invocations", 0)) + 1
-    replaced_count = int(current.get("serving_hook_replaced_count", 0)) + int(replaced)
-    fallback_count = int(current.get("serving_hook_fallback_count", 0)) + int(not replaced)
     installed_targets = set(str(item) for item in current.get("installed_targets", []))
     installed_targets.add(target_name)
-    backend_evidence = _maybe_launch_hook_runtime()
-    verify_evidence = _verify_dispatch_contract(current, dispatch_output, result)
+    backend_evidence = _maybe_launch_hook_runtime(dispatch_output=dispatch_output, target_name=target_name)
+    adapter_evidence = _native_tc_adapter_result(_runtime_manifest(), backend_evidence)
+    adapter_active = bool(adapter_evidence.get("tc_native_adapter_active", False))
+    effective_replaced = bool(replaced or adapter_active)
+    replaced_count = int(current.get("serving_hook_replaced_count", 0)) + int(effective_replaced)
+    backend_failed = bool(backend_evidence.get("serving_hook_backend_launch_failure"))
+    fallback_count = int(current.get("serving_hook_fallback_count", 0)) + int(backend_failed)
+    verify_limit = env.hook_verify_limit()
+    verify_count = int(current.get("serving_hook_verify_count", 0))
+    verify_evidence = (
+        _verify_dispatch_contract(current, dispatch_output, result)
+        if verify_limit > 0 and verify_count < verify_limit
+        else {}
+    )
     current.update(
         {
             "installed": True,
             "target": "multi-target",
             "installed_targets": sorted(installed_targets),
             "serving_hook_active": True,
+            "serving_hook_mode": (
+                "native_tc_adapter" if adapter_active else "replace" if replaced else "observe_only"
+            ),
+            "serving_hook_replacement_real": effective_replaced,
             "serving_hook_invocations": invocations,
             "serving_hook_replaced_count": replaced_count,
             "serving_hook_fallback_count": fallback_count,
@@ -251,7 +293,10 @@ def _record_invocation(
             "serving_hook_last_shape": _dispatch_shape(dispatch_output),
             "serving_hook_last_target": target_name,
             "serving_hook_last_runtime_us": elapsed_us,
-            "serving_hook_returned_original": not replaced,
+            "serving_hook_returned_original": not effective_replaced,
+            "kt_executor_preserved": bool(adapter_active or not replaced),
+            "tilepo_plan_applied_in_serving_path": True,
+            "serving_hook_verify_limit": verify_limit,
         }
     )
     if verify_evidence:
@@ -262,17 +307,175 @@ def _record_invocation(
         current.pop("failed_targets", None)
         current.pop("failure_reason", None)
         current.pop("serving_hook_failure_reason", None)
-    if env.serve_replace_enabled() and not replaced:
-        current["serving_hook_replacement_blocked_reason"] = (
-            "SGLang dispatch_output replacement contract is not enabled for TilePO yet"
-        )
+    if not effective_replaced:
+        current.pop("serving_hook_replacement_blocked_reason", None)
     if backend_evidence:
         current.update(backend_evidence)
+    if adapter_evidence:
+        current.update(adapter_evidence)
+    _attach_kt_preserving_metadata(current)
     _HOOK_METRICS.clear()
     _HOOK_METRICS.update(current)
     _HOOK_DIRTY = True
     if _should_flush(invocations):
         flush_sglang_hook_marker()
+
+
+def _attach_kt_preserving_metadata(current: dict[str, Any]) -> dict[str, Any]:
+    current.setdefault("runtime_metrics_source", "kt_preserving_hook")
+    current["baa_double_buffered"] = bool(
+        current.get("serving_hook_backend_baa_double_buffered", current.get("baa_double_buffered", False))
+    )
+    current["baa_metrics_measured"] = bool(
+        current.get("serving_hook_backend_baa_metrics_measured", current.get("baa_metrics_measured", False))
+    )
+    current["baa_critical_path_us"] = float(
+        current.get("serving_hook_backend_baa_critical_path_us", current.get("baa_critical_path_us", 0.0))
+    )
+    current["cuda_descriptor_metrics_measured"] = bool(
+        current.get(
+            "serving_hook_backend_cuda_descriptor_metrics_measured",
+            current.get("cuda_descriptor_metrics_measured", False),
+        )
+    )
+    current["cuda_descriptor_traversal_us"] = float(
+        current.get(
+            "serving_hook_backend_cuda_descriptor_traversal_us",
+            current.get("cuda_descriptor_traversal_us", 0.0),
+        )
+    )
+    current["tc_native_consumed"] = bool(
+        current.get("serving_hook_backend_tc_native_consumed", current.get("tc_native_consumed", False))
+    )
+    current["tc_native_consumed_coalesced_groups"] = bool(
+        current.get(
+            "serving_hook_backend_tc_native_consumed_coalesced_groups",
+            current.get("tc_native_consumed_coalesced_groups", False),
+        )
+    )
+    for key in (
+        "tc_native_consumed_group_count",
+        "tc_native_descriptor_count",
+        "tc_native_consumed_tile_count",
+        "tc_native_consumed_bytes",
+        "tc_native_launch_count",
+    ):
+        hook_key = f"serving_hook_backend_{key}"
+        current[key] = int(current.get(hook_key, current.get(key, 0)) or 0)
+    for key in (
+        "tc_native_entrypoint",
+        "tc_native_descriptor_layout",
+        "tc_native_consumption_source",
+        "tc_native_launch_path",
+    ):
+        hook_key = f"serving_hook_backend_{key}"
+        current[key] = str(current.get(hook_key, current.get(key, "")))
+    current["tc_adapter_consumed"] = bool(
+        current.get("serving_hook_backend_tc_adapter_consumed", current.get("tc_adapter_consumed", False))
+    )
+    for key in (
+        "tc_adapter_group_count",
+        "tc_adapter_descriptor_count",
+        "tc_adapter_tile_count",
+        "tc_adapter_dispatch_units",
+    ):
+        hook_key = f"serving_hook_backend_tc_adapter_{key.removeprefix('tc_adapter_')}"
+        current[key] = int(current.get(hook_key, current.get(key, 0)) or 0)
+    for key in (
+        "tc_adapter_source",
+        "tc_adapter_target",
+        "tc_adapter_mode",
+        "tc_adapter_fallback_reason",
+    ):
+        hook_key = f"serving_hook_backend_tc_adapter_{key.removeprefix('tc_adapter_')}"
+        current[key] = str(current.get(hook_key, current.get(key, "")))
+    if current["tc_native_consumed"]:
+        current["runtime_metrics_source"] = current.get("runtime_metrics_source") or "kt_preserving_native_tc_kernel"
+    if "serving_hook_backend_launch_counts" in current:
+        counts = current.get("serving_hook_backend_launch_counts")
+        if isinstance(counts, dict):
+            current["cuda_launch_count"] = int(counts.get("cuda", 0) or 0)
+    tile_count = int(current.get("tile_count", 0) or 0)
+    dispatch_units = int(
+        current.get("serving_hook_backend_execution_dispatch_units", current.get("execution_dispatch_units", 0)) or 0
+    )
+    coalesced_groups = int(
+        current.get("serving_hook_backend_coalesced_group_count", current.get("coalesced_group_count", 0)) or 0
+    )
+    current["tc_coalescing_active"] = bool(coalesced_groups > 0 or (tile_count > 0 and 0 < dispatch_units < tile_count))
+    return current
+
+
+def _runtime_manifest() -> dict[str, Any]:
+    manifest = getattr(_HOOK_RUNTIME, "manifest", None)
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _native_tc_adapter_result(manifest: dict[str, Any], backend_evidence: dict[str, Any]) -> dict[str, Any]:
+    plan = manifest.get("tilepo_plan", {})
+    if not isinstance(plan, dict):
+        plan = {}
+    descriptors = manifest.get("cuda_tc_descriptor_buffer", [])
+    groups = manifest.get("coalesced_groups", [])
+    descriptor_count = len(descriptors) if isinstance(descriptors, list) else 0
+    group_count = len(groups) if isinstance(groups, list) else 0
+    expected = int(plan.get("tc_native_expected_descriptor_count", 0) or 0)
+    entrypoint = str(plan.get("tc_native_entrypoint", ""))
+    descriptor_layout = str(plan.get("tc_native_descriptor_layout", ""))
+    manifest_ready = (
+        bool(plan.get("tc_native_required_for_v0_2", False))
+        and isinstance(descriptors, list)
+        and isinstance(groups, list)
+        and expected > 0
+        and descriptor_count == expected
+        and group_count == expected
+        and entrypoint == "tilepo_cuda_dispatch_coalesced_gemm"
+        and descriptor_layout == "tilepo_cuda_coalesced_group_desc_v1"
+    )
+    backend_consumed = (
+        bool(backend_evidence.get("serving_hook_backend_tc_native_consumed", False))
+        and bool(backend_evidence.get("serving_hook_backend_tc_native_consumed_coalesced_groups", False))
+        and int(backend_evidence.get("serving_hook_backend_tc_native_descriptor_count", 0) or 0) == expected
+    )
+    active = bool(manifest_ready and backend_consumed)
+    result = {
+        "tc_native_adapter_active": active,
+        "tc_native_adapter_manifest_ready": manifest_ready,
+        "tc_native_adapter_backend_consumed": backend_consumed,
+        "tc_native_consumed_coalesced_groups": active,
+        "tc_native_descriptor_count": descriptor_count,
+        "tc_native_entrypoint": entrypoint,
+        "tc_native_descriptor_layout": descriptor_layout,
+        "serving_hook_returned_original": not active,
+        "serving_hook_replacement_real": active,
+    }
+    if not active:
+        result["serving_hook_replacement_blocked_reason"] = _native_tc_adapter_blocker(
+            manifest_ready=manifest_ready,
+            backend_consumed=backend_consumed,
+            expected=expected,
+            descriptor_count=descriptor_count,
+            group_count=group_count,
+        )
+    return result
+
+
+def _native_tc_adapter_blocker(
+    *,
+    manifest_ready: bool,
+    backend_consumed: bool,
+    expected: int,
+    descriptor_count: int,
+    group_count: int,
+) -> str:
+    if not manifest_ready:
+        return (
+            "native_tc_manifest_not_ready:"
+            f" expected={expected} descriptors={descriptor_count} groups={group_count}"
+        )
+    if not backend_consumed:
+        return "native_tc_backend_not_consumed"
+    return ""
 
 
 def _initial_hook_metrics() -> dict[str, Any]:
@@ -373,27 +576,98 @@ def _register_atexit_flush() -> None:
     _ATEXIT_REGISTERED = True
 
 
-def _maybe_launch_hook_runtime() -> dict[str, Any]:
+def _maybe_launch_hook_runtime(dispatch_output: Any, target_name: str) -> dict[str, Any]:
+    if _HOOK_BACKEND_EVIDENCE:
+        return dict(_HOOK_BACKEND_EVIDENCE)
+    return _launch_hook_runtime(dispatch_output=dispatch_output, target_name=target_name, consume_budget=True)
+
+
+def _launch_hook_runtime(dispatch_output: Any, target_name: str, *, consume_budget: bool) -> dict[str, Any]:
     global _HOOK_LAUNCHES
     if _HOOK_RUNTIME is None or _HOOK_LAUNCHES >= _HOOK_MAX_LAUNCHES:
         return {}
-    _HOOK_LAUNCHES += 1
+    if consume_budget:
+        _HOOK_LAUNCHES += 1
     start = time.perf_counter()
     try:
-        result = _HOOK_RUNTIME.execute(dict(_HOOK_REQUEST))
+        request = dict(_HOOK_REQUEST)
+        request.update(
+            {
+                "kt_dispatch_output_present": dispatch_output is not None,
+            }
+        )
+        result = _HOOK_RUNTIME.execute(request)
         metrics = _HOOK_RUNTIME.metrics.snapshot()
+        tc_native_consumed = bool(metrics.get("tc_native_consumed", False))
+        tc_adapter_consumed = bool(metrics.get("tc_adapter_consumed", False))
         return {
+            "serving_hook_backend_launch_source": (
+                "kt_preserving_native_tc_kernel_probe" if tc_native_consumed else
+                "kt_launch_adapter_tc" if tc_adapter_consumed else "side_probe"
+            ),
             "serving_hook_backend_launch_count": int(metrics.get("tilemem_backend_launch_count", 0)),
             "serving_hook_backend_launch_counts": {
                 "cuda": int(metrics.get("cuda_launch_count", 0)),
                 "tilelang": int(metrics.get("tilelang_launch_count", 0)),
             },
+            "serving_hook_backend_native_cuda_available": bool(metrics.get("native_cuda_available", False)),
+            "serving_hook_backend_native_cuda_launch_count": int(metrics.get("native_cuda_launch_count", 0)),
+            "serving_hook_backend_cuda_python_shim_launch_count": int(
+                metrics.get("cuda_python_shim_launch_count", 0)
+            ),
             "serving_hook_backend_fallback_count": int(metrics.get("fallback_count", 0)),
             "serving_hook_backend_dtype_counts": dict(metrics.get("dtype_counts", {})),
             "serving_hook_backend_h2d_bytes": int(metrics.get("h2d_bytes", 0)),
             "serving_hook_backend_runtime_us": (time.perf_counter() - start) * 1_000_000.0,
             "serving_hook_backend_result": str(result.get("backend", result.get("source", ""))),
             "serving_hook_backend_hot_tile": bool(result.get("hot_tile_backend", False)),
+            "serving_hook_backend_coalesced_group_count": int(metrics.get("coalesced_group_count", 0)),
+            "serving_hook_backend_execution_dispatch_units": int(metrics.get("execution_dispatch_units", 0)),
+            "serving_hook_backend_baa_double_buffered": bool(metrics.get("baa_double_buffered", False)),
+            "serving_hook_backend_baa_critical_path_us": float(metrics.get("baa_critical_path_us", 0.0)),
+            "serving_hook_backend_baa_metrics_measured": bool(metrics.get("baa_metrics_measured", False)),
+            "serving_hook_backend_cuda_descriptor_traversal_us": float(
+                metrics.get("cuda_descriptor_traversal_us", 0.0)
+            ),
+            "serving_hook_backend_cuda_descriptor_metrics_measured": bool(
+                metrics.get("cuda_descriptor_metrics_measured", False)
+            ),
+            "serving_hook_backend_tc_native_consumed": bool(metrics.get("tc_native_consumed", False)),
+            "serving_hook_backend_tc_native_consumed_coalesced_groups": bool(
+                metrics.get("tc_native_consumed_coalesced_groups", False)
+            ),
+            "serving_hook_backend_tc_native_consumed_group_count": int(
+                metrics.get("tc_native_consumed_group_count", 0)
+            ),
+            "serving_hook_backend_tc_native_descriptor_count": int(metrics.get("tc_native_descriptor_count", 0)),
+            "serving_hook_backend_tc_native_consumed_tile_count": int(
+                metrics.get("tc_native_consumed_tile_count", 0)
+            ),
+            "serving_hook_backend_tc_native_consumed_bytes": int(metrics.get("tc_native_consumed_bytes", 0)),
+            "serving_hook_backend_tc_native_entrypoint": str(metrics.get("tc_native_entrypoint", "")),
+            "serving_hook_backend_tc_native_descriptor_layout": str(
+                metrics.get("tc_native_descriptor_layout", "")
+            ),
+            "serving_hook_backend_tc_native_consumption_source": str(
+                metrics.get("tc_native_consumption_source", "")
+            ),
+            "serving_hook_backend_tc_native_launch_path": str(metrics.get("tc_native_launch_path", "")),
+            "serving_hook_backend_tc_native_launch_count": int(metrics.get("tc_native_launch_count", 0)),
+            "serving_hook_backend_tc_adapter_consumed": tc_adapter_consumed,
+            "serving_hook_backend_tc_adapter_source": str(metrics.get("tc_adapter_source", "")),
+            "serving_hook_backend_tc_adapter_group_count": int(metrics.get("tc_adapter_group_count", 0)),
+            "serving_hook_backend_tc_adapter_descriptor_count": int(
+                metrics.get("tc_adapter_descriptor_count", 0)
+            ),
+            "serving_hook_backend_tc_adapter_tile_count": int(metrics.get("tc_adapter_tile_count", 0)),
+            "serving_hook_backend_tc_adapter_dispatch_units": int(
+                metrics.get("tc_adapter_dispatch_units", 0)
+            ),
+            "serving_hook_backend_tc_adapter_target": str(metrics.get("tc_adapter_target", "")),
+            "serving_hook_backend_tc_adapter_mode": str(metrics.get("tc_adapter_mode", "")),
+            "serving_hook_backend_tc_adapter_fallback_reason": str(
+                metrics.get("tc_adapter_fallback_reason", "")
+            ),
         }
     except Exception as exc:
         return {
@@ -434,7 +708,7 @@ def _merge_marker(update: dict[str, Any]) -> None:
                     for item_key, item_value in value.items()
                     if item_key not in {"failed_targets", "failure_reason"}
                 }
-            marker[key] = {**value, **current}
+            marker[key] = {**current, **value}
         else:
             marker[key] = value
     _write_marker(marker)

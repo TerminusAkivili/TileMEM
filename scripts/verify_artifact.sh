@@ -21,6 +21,7 @@ python3 tools/tests/assert_integration_interface.py
 python3 tools/tests/assert_olmoe_integration_benchmark.py
 python3 tools/tests/assert_customer_integration_end_to_end.py
 python3 tools/tests/assert_tilepo_ablation.py
+python3 tools/tests/assert_tilepo_adaptive_granularity.py
 python3 tools/tests/assert_openai_varprompt_bench.py
 python3 tools/tests/assert_sweep_bench_tool.py
 python3 tools/tests/assert_tmap.py
@@ -63,6 +64,10 @@ for required in \
   "$PACKAGE_DIR/tools/tests/assert_tilemem_industrial_quickstart.py" \
   "$PACKAGE_DIR/tools/tests/assert_olmoe_integration_benchmark.py" \
   "$PACKAGE_DIR/tools/tests/assert_customer_integration_end_to_end.py" \
+  "$PACKAGE_DIR/tools/tests/assert_tilepo_adaptive_granularity.py" \
+  "$PACKAGE_DIR/tools/report_tilepo_adaptive_granularity" \
+  "$PACKAGE_DIR/scripts/reproduce_adaptive_granularity.sh" \
+  "$PACKAGE_DIR/tilepo/reporting/adaptive_granularity.py" \
   "$PACKAGE_DIR/tools/tests/assert_openai_varprompt_bench.py" \
   "$PACKAGE_DIR/tools/tests/assert_sweep_bench_tool.py" \
   "$PACKAGE_DIR/tools/tilemem_checkpoint_prepare" \
@@ -125,6 +130,10 @@ if [[ -f "publish/$PKG_NAME.tar.gz.sha256" ]]; then
     "$PKG_NAME/tools/tests/assert_tilemem_industrial_quickstart.py" \
     "$PKG_NAME/tools/tests/assert_olmoe_integration_benchmark.py" \
     "$PKG_NAME/tools/tests/assert_customer_integration_end_to_end.py" \
+    "$PKG_NAME/tools/tests/assert_tilepo_adaptive_granularity.py" \
+    "$PKG_NAME/tools/report_tilepo_adaptive_granularity" \
+    "$PKG_NAME/scripts/reproduce_adaptive_granularity.sh" \
+    "$PKG_NAME/tilepo/reporting/adaptive_granularity.py" \
     "$PKG_NAME/tools/tests/assert_openai_varprompt_bench.py" \
     "$PKG_NAME/tools/tests/assert_sweep_bench_tool.py" \
     "$PKG_NAME/tools/tilemem_checkpoint_prepare" \

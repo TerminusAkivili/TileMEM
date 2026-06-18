@@ -12,7 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tilepo.compiler import compile_plan
 from tilepo import env as tilepo_env
-from tilepo.mir import RuntimeMode
+from tilepo.backends.cuda_backend import CUDABackend
+from tilepo.kt_patch import sglang_hook
+from tilepo.mir import Backend, RuntimeMode
 from tilepo.runtime import TileMEMRuntime
 from tilepo.ablation import render_tilepo_plan, write_merged_manifest
 
@@ -52,7 +54,7 @@ def main() -> int:
         base = Path("configs/tilepo_olmoe_bf16_only.tmem")
 
         manifests = {}
-        for policy in ("tilepo_coarse", "tilepo_fine", "tilepo_hybrid"):
+        for policy in ("tilepo_coarse", "tilepo_fine", "tilepo_hybrid", "tilepo_adaptive"):
             plan = root / f"{policy}.tmem"
             plan.write_text(render_tilepo_plan(base, expert_budget=6, policy=policy, async_planning=True))
             compiled = compile_plan(plan, root / f"compiled_{policy}")
@@ -66,7 +68,114 @@ def main() -> int:
         coarse_tiles = manifests["tilepo_coarse"]["tilepo_plan"]["tile_count"]
         fine_tiles = manifests["tilepo_fine"]["tilepo_plan"]["tile_count"]
         hybrid_tiles = manifests["tilepo_hybrid"]["tilepo_plan"]["tile_count"]
+        adaptive_tiles = manifests["tilepo_adaptive"]["tilepo_plan"]["tile_count"]
+        fine_dispatch = manifests["tilepo_fine"]["tilepo_plan"]["estimated_dispatch_units"]
         assert coarse_tiles < hybrid_tiles < fine_tiles, (coarse_tiles, hybrid_tiles, fine_tiles)
+        assert coarse_tiles < adaptive_tiles < fine_tiles, (coarse_tiles, adaptive_tiles, fine_tiles)
+        adaptive_plan = manifests["tilepo_adaptive"]["tilepo_plan"]
+        assert adaptive_plan["adaptive_mode"] == "throughput"
+        assert adaptive_plan["adaptive_objective"] == "maximize_throughput_minus_metadata_dispatch_and_tail_penalty"
+        assert adaptive_plan["hot_expert_budget"] == 3
+        assert adaptive_plan["warm_expert_budget"] == 2
+        assert adaptive_plan["cold_expert_budget"] == 1
+        assert adaptive_plan["estimated_tile_count"] == adaptive_tiles
+        assert adaptive_plan["estimated_dispatch_units"] < fine_dispatch * 0.70
+        assert 0.49 < adaptive_plan["coarse_equivalent_hot_ratio"] < 0.51
+        segments = {segment["name"]: segment for segment in adaptive_plan["adaptive_segments"]}
+        assert segments["hot"]["shape"] == "coarse"
+        assert segments["hot"]["shard_count"] == 1
+        assert segments["warm"]["shape"] == "medium"
+        assert segments["cold"]["shape"] == "fine"
+        hot_tile_ids = [
+            tile for tile in manifests["tilepo_adaptive"]["tile_ids"].values()
+            if tile["expert"] < adaptive_plan["hot_expert_budget"]
+        ]
+        assert hot_tile_ids
+        assert all(tile["shard_id"] == 0 for tile in hot_tile_ids)
+
+        atb_plan = root / "tilepo_atg_tc_baa_mixed8.tmem"
+        atb_plan.write_text(
+            render_tilepo_plan(
+                base,
+                expert_budget=8,
+                policy="tilepo_atg_tc_baa",
+                async_planning=True,
+                workload_profile="mixed",
+            )
+        )
+        atb_manifest = compile_plan(atb_plan, root / "compiled_tilepo_atg_tc_baa_mixed8").manifest
+        atb_tilepo_plan = atb_manifest["tilepo_plan"]
+        assert atb_tilepo_plan["policy"] == "tilepo_atg_tc_baa"
+        assert atb_tilepo_plan["tc_native_required_for_v0_2"] is True
+        assert atb_tilepo_plan["tc_native_descriptor_layout"] == "tilepo_cuda_coalesced_group_desc_v1"
+        assert atb_tilepo_plan["tc_native_entrypoint"] == "tilepo_cuda_dispatch_coalesced_gemm"
+        assert atb_tilepo_plan["tc_native_expected_descriptor_count"] == 8
+        assert atb_tilepo_plan["tile_count"] == 16384
+        assert atb_tilepo_plan["placement_tile_count"] == 16384
+        assert atb_tilepo_plan["placement_tile_count"] == len(atb_manifest["tile_offsets"])
+        assert atb_tilepo_plan["execution_dispatch_units"] == 8
+        assert atb_tilepo_plan["coalesced_group_count"] == 8
+        assert atb_tilepo_plan["estimated_dispatch_units"] == 8
+        assert len(atb_manifest["cuda_tc_descriptor_buffer"]) == 8
+        assert len(atb_manifest["coalesced_groups"]) == 8
+        assert sum(group["tile_count"] for group in atb_manifest["coalesced_groups"]) == 16384
+        assert {group["expert"] for group in atb_manifest["coalesced_groups"]} == set(range(8))
+        atb_segments = atb_tilepo_plan["adaptive_segments"]
+        assert atb_segments == [
+            {
+                "name": "hot",
+                "shape": "fine",
+                "expert_start": 0,
+                "expert_end": 8,
+                "expert_count": 8,
+                "hidden_tile": 64,
+                "intermediate_tile": 128,
+                "shard_count": 64,
+                "reason": "protect grouped GEMM and launch efficiency",
+            }
+        ]
+        atb_runtime = TileMEMRuntime(
+            atb_manifest,
+            {Backend.CUDA: CUDABackend(require_native=True)},
+            mode=RuntimeMode.SERVE,
+        )
+        atb_runtime.prefetch_plan({"topk": [(0, 0)], "require_tilemem": True})
+        atb_result = atb_runtime.execute({"topk": [(0, 0)], "require_tilemem": True, "payload": "ok"})
+        atb_metrics = atb_runtime.metrics.snapshot()
+        assert atb_result["tc_native_consumed"] is True
+        assert atb_result["execution_path"] == "kt_grouped_moe_cuda_adapter"
+        assert atb_metrics["tc_native_descriptor_count"] == 8
+        assert atb_metrics["tc_native_consumed_tile_count"] == 16384
+        assert atb_metrics["execution_dispatch_units"] == 8
+        assert atb_metrics["cuda_descriptor_metrics_measured"] is True
+        assert atb_metrics["cuda_descriptor_traversal_us"] >= 0.0
+        sglang_hook.reset_for_tests()
+        sglang_hook.configure_sglang_hook_runtime(
+            atb_runtime,
+            {"topk": [(0, 0)], "require_tilemem": True, "payload": "ok"},
+            max_launches=1,
+        )
+        sglang_hook._record_invocation(  # type: ignore[attr-defined]
+            layer=object(),
+            dispatch_output=None,
+            result="kt-output",
+            elapsed_us=1.0,
+            replaced=False,
+            failure_reason="",
+            target_name="KTEPWrapperMethod.apply",
+        )
+        hook_metrics = dict(sglang_hook._HOOK_METRICS)  # type: ignore[attr-defined]
+        assert hook_metrics["serving_hook_returned_original"] is False
+        assert hook_metrics["serving_hook_replaced_count"] >= 1
+        assert hook_metrics["serving_hook_mode"] == "native_tc_adapter"
+        assert hook_metrics["serving_hook_replacement_real"] is True
+        assert hook_metrics["serving_hook_fallback_count"] == 0
+        assert hook_metrics["tc_native_consumed"] is True
+        assert hook_metrics["tc_native_consumed_coalesced_groups"] is True
+        assert hook_metrics["tc_native_descriptor_count"] == 8
+        assert hook_metrics["tc_native_entrypoint"] == "tilepo_cuda_dispatch_coalesced_gemm"
+        assert hook_metrics["tc_native_descriptor_layout"] == "tilepo_cuda_coalesced_group_desc_v1"
+        sglang_hook.reset_for_tests()
 
         runtime = TileMEMRuntime(manifests["tilepo_fine"], {}, mode=RuntimeMode.SERVE)
         request = {"topk": [(0, 0)], "require_tilemem": True}

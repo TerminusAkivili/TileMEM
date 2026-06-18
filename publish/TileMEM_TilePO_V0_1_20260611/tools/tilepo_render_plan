@@ -15,7 +15,12 @@ def main() -> int:
     parser.add_argument("--base-plan", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--experts", type=int, required=True)
-    parser.add_argument("--policy", choices=["tilepo_coarse", "tilepo_fine", "tilepo_hybrid"], required=True)
+    parser.add_argument(
+        "--policy",
+        choices=["tilepo_coarse", "tilepo_fine", "tilepo_hybrid", "tilepo_adaptive"],
+        required=True,
+    )
+    parser.add_argument("--adaptive-mode", choices=["throughput", "balanced", "tail_latency"], default="throughput")
     parser.add_argument("--async-planning", choices=["off", "on"], required=True)
     args = parser.parse_args()
     output = write_tilepo_plan(
@@ -24,6 +29,7 @@ def main() -> int:
         expert_budget=args.experts,
         policy=args.policy,
         async_planning=args.async_planning == "on",
+        adaptive_mode=args.adaptive_mode,
     )
     print(output)
     return 0

@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from runtime_safety import host_snapshot, read_or_collect_host_info, write_json_snapshot
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--host-fixture")
+    parser.add_argument("--phase", default="host-guard")
+    parser.add_argument("--max-host-commit-percent", type=float, default=100.0)
+    parser.add_argument("--max-vmmem-gib", type=float, default=0.0)
+    parser.add_argument("--timeout-sec", type=float, default=10.0)
+    args = parser.parse_args()
+
+    try:
+        info = read_or_collect_host_info(
+            Path(args.host_fixture) if args.host_fixture else None,
+            timeout_sec=args.timeout_sec,
+        )
+        snapshot = host_snapshot(
+            info,
+            max_host_commit_percent=args.max_host_commit_percent,
+            max_vmmem_gib=args.max_vmmem_gib,
+            phase=args.phase,
+        )
+    except Exception as exc:
+        snapshot = {
+            "phase": args.phase,
+            "status": "fail",
+            "failure_reasons": [f"host guard failed to inspect Windows host: {exc}"],
+            "host": {},
+        }
+    write_json_snapshot(Path(args.out), snapshot)
+    if snapshot.get("status") != "pass":
+        print("; ".join(snapshot.get("failure_reasons", [])))
+        return 1
+    host = snapshot.get("host", {})
+    print(
+        "host guard pass: "
+        f"commit {host.get('commit_percent', 0):.1f}%, "
+        f"vmmem {host.get('vmmem_virtual_gib', 0):.1f} GiB"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
