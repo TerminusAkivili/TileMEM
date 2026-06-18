@@ -18,11 +18,19 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--out-dir", default="")
     parser.add_argument("--require-real", action="store_true")
+    parser.add_argument("--strict-v0-2-win", "--strict-atg-win", action="store_true")
+    parser.add_argument("--v0-2-only", action="store_true")
     args = parser.parse_args()
     manifest = Path(args.manifest)
     out_dir = Path(args.out_dir) if args.out_dir else manifest.parent
     try:
-        result = generate_adaptive_granularity_report(manifest, out_dir, require_real=args.require_real)
+        result = generate_adaptive_granularity_report(
+            manifest,
+            out_dir,
+            require_real=args.require_real,
+            strict_v0_2_win=args.strict_v0_2_win,
+            v0_2_only=args.v0_2_only,
+        )
     except (AdaptiveGranularityReportError, ValueError) as exc:
         print(f"TilePO adaptive granularity reporter rejected evidence: {exc}", file=sys.stderr)
         return 1

@@ -702,7 +702,7 @@ def _probe_environment(
     if c_init_path and not Path(c_init_path).exists():
         blockers.append(f"missing KT frequency init path for C: {c_init_path}")
     if bench_tool is None or not bench_tool.exists():
-        blockers.append("missing tools/openai_varprompt_bench")
+        blockers.append("missing tools/openai_varprompt_bench in this checkout")
     if shutil.which("python3") is None:
         blockers.append("python3 unavailable")
     if shutil.which("conda") is None:
