@@ -53,34 +53,6 @@ The report summarizes the TileMEM implementation architecture, the TilePO
 VRAM/DRAM tile-placement motivation, V0.1 BF16 same-budget results, claim
 boundaries, reproducibility path, and public priority record.
 
-## Priority Record
-
-TileMEM / TilePO keeps two public records: the original priority anchor and the
-current PDF-included record. The original record preserves first public
-disclosure. The current record adds the generated technical report PDF to the
-archived artifact chain.
-
-Original priority anchor, 2026-06-11:
-
-- GitHub release: [v0.1-priority-2026-06-11](https://github.com/TerminusAkivili/TileMEM/releases/tag/v0.1-priority-2026-06-11)
-- Zenodo DOI: [10.5281/zenodo.20646195](https://doi.org/10.5281/zenodo.20646195)
-- Zenodo concept DOI: `10.5281/zenodo.20646194`
-- Software Heritage SWHID: `swh:1:snp:073ee68e366c28f478e81db109056b68f9b146ab`
-- Release tarball SHA256: `4592f09fb451c5d0fe998d9f4fb83ab774100ddba72dc580ef1c5772b7b70f3b`
-
-Current PDF-included record, 2026-06-12:
-
-- GitHub release: [v0.1.1-pdf-2026-06-12](https://github.com/TerminusAkivili/TileMEM/releases/tag/v0.1.1-pdf-2026-06-12)
-- Zenodo DOI: [10.5281/zenodo.20648132](https://doi.org/10.5281/zenodo.20648132)
-- Zenodo concept DOI: `10.5281/zenodo.20646194`
-- Software Heritage SWHID: `swh:1:snp:1b8b452d7fc26b52c53ae79a2dcfed0e98984389`
-- Git tag: `v0.1.1-pdf-2026-06-12`
-- Git commit: `b864a2375e7f05ce41200a43c90c2016fd738590`
-- PDF SHA256: `97aef412b58835eeed318aeb4a439aec4e87990252f92dfb0e2adac1cae770d7`
-- Release package SHA256: `e48a32ddfa081a7ab4a327fa56044abd6eb8c0abba75666e5db8438ea91db5dc`
-
-These records are backed by public GitHub releases, Zenodo archives, Software
-Heritage snapshots, and SHA256 checksums.
 
 ## Citation
 
