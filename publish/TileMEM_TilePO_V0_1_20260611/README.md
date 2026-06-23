@@ -53,34 +53,6 @@ The report summarizes the TileMEM implementation architecture, the TilePO
 VRAM/DRAM tile-placement motivation, V0.1 BF16 same-budget results, claim
 boundaries, reproducibility path, and public priority record.
 
-## Priority Record
-
-TileMEM / TilePO keeps two public records: the original priority anchor and the
-current PDF-included record. The original record preserves first public
-disclosure. The current record adds the generated technical report PDF to the
-archived artifact chain.
-
-Original priority anchor, 2026-06-11:
-
-- GitHub release: [v0.1-priority-2026-06-11](https://github.com/TerminusAkivili/TileMEM/releases/tag/v0.1-priority-2026-06-11)
-- Zenodo DOI: [10.5281/zenodo.20646195](https://doi.org/10.5281/zenodo.20646195)
-- Zenodo concept DOI: `10.5281/zenodo.20646194`
-- Software Heritage SWHID: `swh:1:snp:073ee68e366c28f478e81db109056b68f9b146ab`
-- Release tarball SHA256: `4592f09fb451c5d0fe998d9f4fb83ab774100ddba72dc580ef1c5772b7b70f3b`
-
-Current PDF-included record, 2026-06-12:
-
-- GitHub release: [v0.1.1-pdf-2026-06-12](https://github.com/TerminusAkivili/TileMEM/releases/tag/v0.1.1-pdf-2026-06-12)
-- Zenodo DOI: [10.5281/zenodo.20648132](https://doi.org/10.5281/zenodo.20648132)
-- Zenodo concept DOI: `10.5281/zenodo.20646194`
-- Software Heritage SWHID: `swh:1:snp:1b8b452d7fc26b52c53ae79a2dcfed0e98984389`
-- Git tag: `v0.1.1-pdf-2026-06-12`
-- Git commit: `b864a2375e7f05ce41200a43c90c2016fd738590`
-- PDF SHA256: `97aef412b58835eeed318aeb4a439aec4e87990252f92dfb0e2adac1cae770d7`
-- Release package SHA256: `e48a32ddfa081a7ab4a327fa56044abd6eb8c0abba75666e5db8438ea91db5dc`
-
-These records are backed by public GitHub releases, Zenodo archives, Software
-Heritage snapshots, and SHA256 checksums.
 
 ## Citation
 
@@ -142,7 +114,7 @@ Serving precision: BF16 / KT-native path
   <img src="docs/assets/tilepo-p95-improvement.png" alt="TilePO p95 latency improvement over KT across expert budgets" width="860">
 </p>
 
-## Industrial Python SDK
+##  Python SDK
 
 TileMEM exposes a compact Python facade for application and kernel integration:
 
@@ -177,12 +149,8 @@ CUDA FP8 kernel handle for `kernels/gemm_fp8.cu`, and reports the measured
 V0.1 TilePO-vs-KT headline gain.
 See [docs/tilemem_python_sdk_quickstart.md](docs/tilemem_python_sdk_quickstart.md).
 
-## Roadmaps
 
-- [V0.1 Priority Roadmap](docs/tilemem_tilepo_v0_1_priority_roadmap_20260611.md)
-- [V2 Execution Efficiency Roadmap](docs/tilemem_tilepo_v2_execution_efficiency_roadmap_20260613.md)
-
-## Production CLI
+##  CLI
 
 For shell workflows, TileMEM ships a thin production-style CLI:
 
@@ -457,10 +425,11 @@ The public model interface is explicit:
 - default precision is BF16;
 - TilePO does not silently switch to FP8/MXFP4.
 
-## V0.12 Public MIR And Replaceable Model Interface
+## v0.1.1 Public MIR And Replaceable Model Interface
 
-V0.12 starts a public interface track for users who want to plug in a different
-MoE model without editing TilePO internals. A model can be described with a
+v0.1.1 folds the public model-interface work into the original V0.1 artifact
+instead of starting a new version track. Users who want to plug in a different
+MoE model do not need to edit TilePO internals: a model can be described with a
 small JSON model spec or supplied by an adapter that implements
 `to_tilemem_model_spec()`.
 
@@ -475,9 +444,9 @@ tools/tilepo_compile_plan \
 Expected outputs:
 
 ```text
-build/model_spec_demo/tilemem_v012_model_spec_template.mir.json
-build/model_spec_demo/tilemem_v012_model_spec_template.manifest.json
-build/model_spec_demo/tilemem_v012_model_spec_template.model_spec.json
+build/model_spec_demo/tilemem_v0_1_1_model_spec_template.mir.json
+build/model_spec_demo/tilemem_v0_1_1_model_spec_template.manifest.json
+build/model_spec_demo/tilemem_v0_1_1_model_spec_template.model_spec.json
 ```
 
 The generated MIR carries:
@@ -485,7 +454,7 @@ The generated MIR carries:
 ```json
 {
   "schema_version": "tilepo_mir_v1",
-  "public_interface": "tilemem_public_mir_v0_12"
+  "public_interface": "tilemem_public_mir_v0_1_1"
 }
 ```
 
@@ -498,9 +467,9 @@ spec = TM.model_spec_from_dict(payload)
 mir = TM.build_mir(spec)
 ```
 
-This first V0.12 interface remains BF16-only. Mixed-precision planning,
-FP8/F6/F4 calibration metadata, quality-gated admission, automatic fallback, and
-production benchmark CLI work are planned as separate V0.12 changes.
+This v0.1.1 interface remains BF16-only. Mixed-precision planning, FP8/F6/F4
+calibration metadata, quality-gated admission, automatic fallback, and
+production benchmark CLI work are outside the v0.1.1 public artifact boundary.
 
 ## Repository Layout
 

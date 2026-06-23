@@ -1,6 +1,6 @@
 {
   "schema_version": "tilemem_model_spec_v1",
-  "name": "tilemem_v012_model_spec_template",
+  "name": "tilemem_v0_1_1_model_spec_template",
   "layers": 2,
   "experts_per_layer": 4,
   "hidden_size": 16,

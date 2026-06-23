@@ -75,9 +75,37 @@ def test_readme_and_reproduce_doc_show_open_box_commands() -> None:
         assert phrase in reproduce, phrase
 
 
+def test_public_mir_story_is_v0_1_1_not_v0_12() -> None:
+    readme = (ROOT / "README.md").read_text()
+    model_template = (ROOT / "configs" / "models" / "model_spec_template.json").read_text()
+    init_py = (ROOT / "tilemem" / "__init__.py").read_text()
+    mir_schema = (ROOT / "tilepo" / "mir" / "schema.py").read_text()
+
+    required_phrases = [
+        "## v0.1.1 Public MIR And Replaceable Model Interface",
+        "tilemem_v0_1_1_model_spec_template",
+        '"public_interface": "tilemem_public_mir_v0_1_1"',
+        '__version__ = "0.1.1"',
+    ]
+    combined = "\n".join([readme, model_template, init_py, mir_schema])
+    for phrase in required_phrases:
+        assert phrase in combined, phrase
+
+    forbidden_phrases = [
+        "V0.12",
+        "v012",
+        "v0_12",
+        "0.12.0",
+        "tilemem_public_mir_v0_12",
+    ]
+    for phrase in forbidden_phrases:
+        assert phrase not in combined, phrase
+
+
 def main() -> None:
     test_cli_verifies_release_evidence_matrix()
     test_readme_and_reproduce_doc_show_open_box_commands()
+    test_public_mir_story_is_v0_1_1_not_v0_12()
     print("TileMEM release-ready tests passed")
 
 

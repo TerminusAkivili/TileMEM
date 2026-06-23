@@ -50,7 +50,7 @@ class ModelSpec:
         dtype_policy = str(self.precision.get("dtype_policy", "bf16"))
         allowed = {str(dtype) for dtype in self.precision.get("allowed", self.precision.get("allow", ["bf16"]))}
         if dtype_policy != "bf16" or allowed != {"bf16"}:
-            raise ValueError("public model spec v1 is BF16-only; mixed precision is planned for a later V0.12 PR")
+            raise ValueError("public model spec v1 is BF16-only; mixed precision is out of scope for v0.1.1")
 
 
 @runtime_checkable

@@ -66,7 +66,7 @@ from .sdk import (
     validate_mir_dict,
 )
 
-__version__ = "0.12.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "Backend",

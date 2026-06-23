@@ -82,7 +82,7 @@ def test_model_spec_builds_public_mir_and_round_trips() -> None:
     mir_dict = mir.to_dict()
     validate_mir_dict(mir_dict)
     assert mir_dict["schema_version"] == "tilepo_mir_v1"
-    assert mir_dict["public_interface"] == "tilemem_public_mir_v0_12"
+    assert mir_dict["public_interface"] == "tilemem_public_mir_v0_1_1"
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "toy.mir.json"
@@ -147,7 +147,7 @@ def test_cli_compiles_model_spec_json() -> None:
         mir_data = json.loads(mir_path.read_text())
         manifest = json.loads(manifest_path.read_text())
         normalized_spec = json.loads((out_dir / "toy_moe.model_spec.json").read_text())
-        assert mir_data["public_interface"] == "tilemem_public_mir_v0_12"
+        assert mir_data["public_interface"] == "tilemem_public_mir_v0_1_1"
         assert manifest["model"] == "toy_moe"
         assert manifest["schema_version"] == "tilepo_manifest_v1"
         assert normalized_spec["schema_version"] == "tilemem_model_spec_v1"
@@ -176,9 +176,9 @@ def test_checked_in_model_spec_template_compiles() -> None:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
         outputs = sorted(path.name for path in out_dir.iterdir())
         assert outputs == [
-            "tilemem_v012_model_spec_template.manifest.json",
-            "tilemem_v012_model_spec_template.mir.json",
-            "tilemem_v012_model_spec_template.model_spec.json",
+            "tilemem_v0_1_1_model_spec_template.manifest.json",
+            "tilemem_v0_1_1_model_spec_template.mir.json",
+            "tilemem_v0_1_1_model_spec_template.model_spec.json",
         ]
 
 

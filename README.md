@@ -425,10 +425,11 @@ The public model interface is explicit:
 - default precision is BF16;
 - TilePO does not silently switch to FP8/MXFP4.
 
-## V0.12 Public MIR And Replaceable Model Interface
+## v0.1.1 Public MIR And Replaceable Model Interface
 
-V0.12 starts a public interface track for users who want to plug in a different
-MoE model without editing TilePO internals. A model can be described with a
+v0.1.1 folds the public model-interface work into the original V0.1 artifact
+instead of starting a new version track. Users who want to plug in a different
+MoE model do not need to edit TilePO internals: a model can be described with a
 small JSON model spec or supplied by an adapter that implements
 `to_tilemem_model_spec()`.
 
@@ -443,9 +444,9 @@ tools/tilepo_compile_plan \
 Expected outputs:
 
 ```text
-build/model_spec_demo/tilemem_v012_model_spec_template.mir.json
-build/model_spec_demo/tilemem_v012_model_spec_template.manifest.json
-build/model_spec_demo/tilemem_v012_model_spec_template.model_spec.json
+build/model_spec_demo/tilemem_v0_1_1_model_spec_template.mir.json
+build/model_spec_demo/tilemem_v0_1_1_model_spec_template.manifest.json
+build/model_spec_demo/tilemem_v0_1_1_model_spec_template.model_spec.json
 ```
 
 The generated MIR carries:
@@ -453,7 +454,7 @@ The generated MIR carries:
 ```json
 {
   "schema_version": "tilepo_mir_v1",
-  "public_interface": "tilemem_public_mir_v0_12"
+  "public_interface": "tilemem_public_mir_v0_1_1"
 }
 ```
 
@@ -466,9 +467,9 @@ spec = TM.model_spec_from_dict(payload)
 mir = TM.build_mir(spec)
 ```
 
-This first V0.12 interface remains BF16-only. Mixed-precision planning,
-FP8/F6/F4 calibration metadata, quality-gated admission, automatic fallback, and
-production benchmark CLI work are planned as separate V0.12 changes.
+This v0.1.1 interface remains BF16-only. Mixed-precision planning, FP8/F6/F4
+calibration metadata, quality-gated admission, automatic fallback, and
+production benchmark CLI work are outside the v0.1.1 public artifact boundary.
 
 ## Repository Layout
 

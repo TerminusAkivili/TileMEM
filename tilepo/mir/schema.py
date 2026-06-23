@@ -9,7 +9,7 @@ from typing import Any
 from tilepo.integration import ScaleLayout, TileFormat
 
 
-PUBLIC_MIR_INTERFACE = "tilemem_public_mir_v0_12"
+PUBLIC_MIR_INTERFACE = "tilemem_public_mir_v0_1_1"
 MIR_SCHEMA_VERSION = "tilepo_mir_v1"
 
 
