@@ -114,7 +114,7 @@ Serving precision: BF16 / KT-native path
   <img src="docs/assets/tilepo-p95-improvement.png" alt="TilePO p95 latency improvement over KT across expert budgets" width="860">
 </p>
 
-## Industrial Python SDK
+##  Python SDK
 
 TileMEM exposes a compact Python facade for application and kernel integration:
 
@@ -149,12 +149,8 @@ CUDA FP8 kernel handle for `kernels/gemm_fp8.cu`, and reports the measured
 V0.1 TilePO-vs-KT headline gain.
 See [docs/tilemem_python_sdk_quickstart.md](docs/tilemem_python_sdk_quickstart.md).
 
-## Roadmaps
 
-- [V0.1 Priority Roadmap](docs/tilemem_tilepo_v0_1_priority_roadmap_20260611.md)
-- [V2 Execution Efficiency Roadmap](docs/tilemem_tilepo_v2_execution_efficiency_roadmap_20260613.md)
-
-## Production CLI
+##  CLI
 
 For shell workflows, TileMEM ships a thin production-style CLI:
 
