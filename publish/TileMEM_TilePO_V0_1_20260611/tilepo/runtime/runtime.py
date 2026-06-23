@@ -21,17 +21,6 @@ class TileMEMRuntime:
             manifest.get("tilepo_async_planning", "on" if ablation.get("async_planning") else "off")
         )
         self.metrics.tile_count = len(manifest.get("tile_offsets", {}))
-        coalesced_groups = manifest.get("coalesced_groups", [])
-        coalesced_group_count = int(ablation.get("coalesced_group_count", len(coalesced_groups)))
-        self.metrics.coalesced_group_count = coalesced_group_count
-        self.metrics.execution_dispatch_units = int(
-            ablation.get("execution_dispatch_units", coalesced_group_count)
-        )
-        self.metrics.baa_double_buffered = bool(ablation.get("baa_double_buffered", False))
-        self.metrics.baa_active_map_id = str(ablation.get("baa_active_map_id", ""))
-        baa_maps = manifest.get("baa_maps", {}) if isinstance(manifest.get("baa_maps", {}), dict) else {}
-        self.metrics.baa_standby_ready = bool(baa_maps.get("standby_ready", False))
-        self.metrics.baa_critical_path_us = 0.0
         self._async_planning_enabled = self.metrics.async_planning_mode == "on"
         self._plan_cache: dict[str, list[str]] = {}
         self.online_path_forbidden_calls: list[str] = []
@@ -77,22 +66,6 @@ class TileMEMRuntime:
         backend_name = getattr(backend, "name", "")
         if backend_name == Backend.CUDA:
             self.metrics.cuda_launch_count += 1
-            native = bool(result.get("native", False)) if isinstance(result, dict) else False
-            self.metrics.native_cuda_available = self.metrics.native_cuda_available or bool(
-                getattr(backend, "native_available", False)
-            )
-            if isinstance(result, dict) and bool(result.get("tc_native_consumed", False)):
-                self.metrics.native_cuda_available = True
-            if native:
-                self.metrics.native_cuda_launch_count += 1
-            else:
-                self.metrics.cuda_python_shim_launch_count += 1
-            if isinstance(result, dict):
-                self._record_tc_native_evidence(result)
-            descriptor_start = time.perf_counter()
-            self._measure_cuda_descriptor_traversal()
-            self.metrics.cuda_descriptor_traversal_us += _elapsed_us(descriptor_start)
-            self.metrics.cuda_descriptor_metrics_measured = True
         elif backend_name == Backend.TILELANG:
             self.metrics.tilelang_launch_count += 1
         for tile in planned_tiles:
@@ -102,51 +75,6 @@ class TileMEMRuntime:
                 self.tile_state.transition(tile, TileResidencyState.GPU_EXECUTING)
                 self.tile_state.transition(tile, TileResidencyState.GPU_RESIDENT)
         return result
-
-    def _measure_cuda_descriptor_traversal(self) -> None:
-        """Touch TC/BAA descriptors so the metric is a measured value, not a constant."""
-        groups = self.manifest.get("coalesced_groups", [])
-        if isinstance(groups, list):
-            for group in groups:
-                if isinstance(group, dict):
-                    _ = group.get("tile_keys", group.get("tiles", group.get("tile_ids", ())))
-        descriptors = self.manifest.get("cuda_tc_descriptor_buffer", [])
-        if isinstance(descriptors, list):
-            for descriptor in descriptors:
-                if isinstance(descriptor, dict):
-                    _ = descriptor.get("group_id")
-                    _ = descriptor.get("byte_count")
-        baa_maps = self.manifest.get("baa_maps", {})
-        if isinstance(baa_maps, dict):
-            _ = baa_maps.get("active")
-            _ = baa_maps.get("standby")
-            self.metrics.baa_metrics_measured = True
-
-    def _record_tc_native_evidence(self, result: dict[str, Any]) -> None:
-        if bool(result.get("tc_native_consumed", False)):
-            self.metrics.tc_native_consumed = True
-            self.metrics.tc_native_consumed_coalesced_groups = bool(
-                result.get("tc_native_consumed_coalesced_groups", True)
-            )
-            self.metrics.tc_native_consumed_group_count = int(result.get("tc_native_consumed_group_count", 0) or 0)
-            self.metrics.tc_native_descriptor_count = int(result.get("tc_native_descriptor_count", 0) or 0)
-            self.metrics.tc_native_consumed_tile_count = int(result.get("tc_native_consumed_tile_count", 0) or 0)
-            self.metrics.tc_native_consumed_bytes = int(result.get("tc_native_consumed_bytes", 0) or 0)
-            self.metrics.tc_native_entrypoint = str(result.get("tc_native_entrypoint", ""))
-            self.metrics.tc_native_descriptor_layout = str(result.get("tc_native_descriptor_layout", ""))
-            self.metrics.tc_native_consumption_source = str(result.get("tc_native_consumption_source", ""))
-            self.metrics.tc_native_launch_path = str(result.get("tc_native_launch_path", ""))
-            self.metrics.tc_native_launch_count = int(result.get("tc_native_launch_count", 0) or 0)
-        if bool(result.get("tc_adapter_consumed", False)):
-            self.metrics.tc_adapter_consumed = True
-            self.metrics.tc_adapter_source = str(result.get("tc_adapter_source", ""))
-            self.metrics.tc_adapter_group_count = int(result.get("tc_adapter_group_count", 0) or 0)
-            self.metrics.tc_adapter_descriptor_count = int(result.get("tc_adapter_descriptor_count", 0) or 0)
-            self.metrics.tc_adapter_tile_count = int(result.get("tc_adapter_tile_count", 0) or 0)
-            self.metrics.tc_adapter_dispatch_units = int(result.get("tc_adapter_dispatch_units", 0) or 0)
-            self.metrics.tc_adapter_target = str(result.get("tc_adapter_target", ""))
-            self.metrics.tc_adapter_mode = str(result.get("tc_adapter_mode", ""))
-            self.metrics.tc_adapter_fallback_reason = str(result.get("tc_adapter_fallback_reason", ""))
 
     def _lookup_tiles(self, request: dict[str, Any]) -> list[str]:
         hot_tiles = set(self.manifest.get("gpu_hot_tiles", []))

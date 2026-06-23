@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import runpy
 import socket
 import subprocess
 import sys
@@ -67,12 +66,10 @@ def test_bench_runs_fake_openai_server_and_bootstraps_tilepo() -> None:
                 """
             )
         )
-        manifest = compile_plan(
-            ROOT / "configs" / "tilepo_olmoe_bf16_only.tmem", root / "compiled"
-        ).manifest_path
+        manifest = compile_plan(ROOT / "configs" / "tilepo_olmoe_bf16_only.tmem", root / "compiled").manifest_path
         out = root / "row.jsonl"
         log = root / "bench.log"
-        marker = out.with_suffix(".tilepo_bootstrap.json")
+        marker = root / "bootstrap.json"
         port = _free_port()
         proc = subprocess.run(
             [
@@ -238,52 +235,11 @@ def test_warmup_latency_is_not_counted_in_measured_latency() -> None:
         assert (time.perf_counter() - started) * 1000.0 > row["p95_latency_ms"]
 
 
-def test_bootstrap_marker_summary_flattens_native_tc_evidence() -> None:
-    namespace = runpy.run_path(str(BENCH), run_name="tilepo_bench_test")
-    marker_summary = namespace["bootstrap_marker_summary"]
-    with tempfile.TemporaryDirectory() as tmp:
-        out = Path(tmp) / "run.jsonl"
-        marker = out.with_suffix(".tilepo_bootstrap.json")
-        marker.write_text(
-            json.dumps(
-                {
-                    "kt_executor_preserved": True,
-                    "runtime_metrics_source": "kt_preserving_native_tc_kernel",
-                    "serving_hook": {
-                        "serving_hook_active": True,
-                        "serving_hook_invocations": 1,
-                        "serving_hook_replaced_count": 1,
-                        "serving_hook_returned_original": False,
-                        "serving_hook_mode": "native_tc_adapter",
-                        "tc_native_consumed_coalesced_groups": True,
-                        "tc_native_descriptor_count": 8,
-                        "tc_native_entrypoint": "tilepo_cuda_dispatch_coalesced_gemm",
-                        "tc_native_descriptor_layout": "tilepo_cuda_coalesced_group_desc_v1",
-                    },
-                },
-                indent=2,
-            )
-        )
-        summary = marker_summary(out)
-        assert summary["kt_executor_preserved"] is True
-        assert summary["runtime_metrics_source"] == "kt_preserving_native_tc_kernel"
-        assert summary["serving_hook_active"] is True
-        assert summary["serving_hook_replaced_count"] == 1
-        assert summary["serving_hook_returned_original"] is False
-        assert summary["serving_hook_mode"] == "native_tc_adapter"
-        assert summary["tc_native_consumed_coalesced_groups"] is True
-        assert summary["tc_native_descriptor_count"] == 8
-        assert summary["tc_native_entrypoint"] == "tilepo_cuda_dispatch_coalesced_gemm"
-        assert summary["tc_native_descriptor_layout"] == "tilepo_cuda_coalesced_group_desc_v1"
-
-
-def main() -> int:
+def main() -> None:
     test_bench_runs_fake_openai_server_and_bootstraps_tilepo()
     test_warmup_latency_is_not_counted_in_measured_latency()
-    test_bootstrap_marker_summary_flattens_native_tc_evidence()
     print("openai_varprompt_bench tests passed")
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
