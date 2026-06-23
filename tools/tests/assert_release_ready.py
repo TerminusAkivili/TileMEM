@@ -75,6 +75,19 @@ def test_readme_and_reproduce_doc_show_open_box_commands() -> None:
         assert phrase in reproduce, phrase
 
 
+def test_readme_opens_with_potential_not_production_gain_boundary() -> None:
+    readme = (ROOT / "README.md").read_text()
+    first_screen = " ".join(readme[:1000].split())
+    required_phrases = [
+        "Claim boundary",
+        "potential, workload-dependent benefits",
+        "should not be read as proven real-world production speedup",
+        "universal serving gain",
+    ]
+    for phrase in required_phrases:
+        assert phrase in first_screen, phrase
+
+
 def test_public_mir_story_is_v0_1_1_not_v0_12() -> None:
     readme = (ROOT / "README.md").read_text()
     model_template = (ROOT / "configs" / "models" / "model_spec_template.json").read_text()
@@ -105,6 +118,7 @@ def test_public_mir_story_is_v0_1_1_not_v0_12() -> None:
 def main() -> None:
     test_cli_verifies_release_evidence_matrix()
     test_readme_and_reproduce_doc_show_open_box_commands()
+    test_readme_opens_with_potential_not_production_gain_boundary()
     test_public_mir_story_is_v0_1_1_not_v0_12()
     print("TileMEM release-ready tests passed")
 

@@ -2,6 +2,12 @@
 
 # TileMEM / TilePO
 
+**Claim boundary:** TileMEM / TilePO is a research artifact for exposing
+potential, workload-dependent benefits of tile-level MoE memory placement and
+admission. The checked-in evidence verifies reproducible BF16 / KT-native
+ablation behavior, but it should not be read as proven real-world production
+speedup or universal serving gain.
+
 TileMEM is an open MoE serving optimization project. TilePO, short for
 Tile-level Placement Optimization, is its BF16 profile-guided tile-level
 placement/admission system for high-throughput MoE serving.
