@@ -64,6 +64,7 @@ add_test(NAME tilemem_cli COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert
 add_test(NAME tilemem_agent_skills COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_agent_skills.py)
 add_test(NAME tilemem_checkpoint_integration COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_checkpoint_integration.py)
 add_test(NAME tilemem_industrial_quickstart COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_tilemem_industrial_quickstart.py)
+add_test(NAME tilemem_release_ready COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_release_ready.py)
 add_test(NAME tilemem_removed_predictor_traces COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_removed_predictor_traces.py)
 set_tests_properties(
   tilepo_ablation
@@ -72,6 +73,7 @@ set_tests_properties(
   tilemem_agent_skills
   tilemem_checkpoint_integration
   tilemem_industrial_quickstart
+  tilemem_release_ready
   tilemem_removed_predictor_traces
   PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )

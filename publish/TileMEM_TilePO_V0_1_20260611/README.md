@@ -11,6 +11,38 @@ method description, source code, V0.1 evidence, public manifests, reproducibilit
 scripts, and checksum tooling needed to make the result public, citable, and
 verifiable.
 
+## Open-Box Verification
+
+After cloning, the release evidence can be checked offline with one command:
+
+```bash
+tools/tilemem evidence verify --json
+```
+
+Expected evidence matrix:
+
+```text
+Workloads: mixed, long_context
+Experts: 2, 4, 6, 8, 10
+Policies: kt_expert, tilepo_coarse, tilepo_fine, tilepo_hybrid
+Async planning: off, on
+Repeats: 3
+Request count: 5
+Rows: 210 / 210 real success
+Gate: PASS
+Serving precision: BF16 / KT-native path
+```
+
+Full offline verification:
+
+```bash
+tools/tilemem doctor
+tools/tilemem verify --quick
+bash scripts/verify_artifact.sh
+```
+
+See [REPRODUCE.md](REPRODUCE.md) for the complete release path.
+
 ## Technical Report
 
 - PDF: [TileMEM / TilePO V0.1 Technical Report](paper/TileMEM_TilePO_V0_1_Technical_Report.pdf)
@@ -157,6 +189,7 @@ For shell workflows, TileMEM ships a thin production-style CLI:
 ```bash
 tools/tilemem doctor
 tools/tilemem verify --quick
+tools/tilemem evidence verify --json
 tools/tilemem compile --model-spec configs/models/model_spec_template.json --out-dir build/cli_compile
 tools/tilemem checkpoint prepare --checkpoint-dir /path/to/hf_checkpoint --out-dir build/checkpoint --backend sglang --dry-run
 ```

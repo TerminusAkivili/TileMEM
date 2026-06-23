@@ -131,12 +131,31 @@ def test_checkpoint_prepare_dry_run_generates_artifact() -> None:
         assert payload["serving"]["status"] == "dry_run"
 
 
+def test_evidence_verify_reports_release_gate() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        completed = _run(
+            "evidence",
+            "verify",
+            "--out-dir",
+            str(Path(tmp) / "evidence"),
+            "--json",
+        )
+        payload = json.loads(completed.stdout)
+        assert payload["schema_version"] == "tilemem_release_evidence_v1"
+        assert payload["status"] == "PASS"
+        assert payload["gate"] == "PASS"
+        assert payload["actual_rows"] == 210
+        assert payload["real_success_rows"] == 210
+        assert payload["serving_precision"] == "BF16 / KT-native path"
+
+
 def main() -> None:
     test_doctor_outputs_json_status()
     test_verify_quick_runs_core_assertions()
     test_compile_wraps_existing_model_spec_compiler()
     test_compile_wraps_existing_tmem_plan_compiler()
     test_checkpoint_prepare_dry_run_generates_artifact()
+    test_evidence_verify_reports_release_gate()
     print("TileMEM CLI tests passed")
 
 

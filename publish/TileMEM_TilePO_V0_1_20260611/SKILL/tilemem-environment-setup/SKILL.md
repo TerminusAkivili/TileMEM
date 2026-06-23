@@ -24,6 +24,7 @@ python3 --version
 ```bash
 tools/tilemem doctor
 tools/tilemem verify --quick
+tools/tilemem evidence verify
 ```
 
 3. If quick verification passes, run the offline SDK/demo path:
@@ -37,6 +38,20 @@ python3 examples/tilemem_industrial_quickstart.py \
 
 ```bash
 bash scripts/verify_artifact.sh
+```
+
+Expected evidence anchors:
+
+```text
+Workloads: mixed, long_context
+Experts: 2, 4, 6, 8, 10
+Policies: kt_expert, tilepo_coarse, tilepo_fine, tilepo_hybrid
+Async planning: off, on
+Repeats: 3
+Request count: 5
+Rows: 210 / 210 real success
+Gate: PASS
+Serving precision: BF16 / KT-native path
 ```
 
 Expected full-gate anchors include `TilePO V0.1 ablation gate: PASS`, `Rows: 210/210`, and `TileMEM / TilePO artifact verification passed.`

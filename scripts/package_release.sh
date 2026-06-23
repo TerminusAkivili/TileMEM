@@ -13,7 +13,7 @@ mkdir -p "$PKG_DIR"
 
 rsync -a \
   .gitattributes README.md PRIORITY_DISCLOSURE.md CLAIM_CHECKLIST.md RELEASE_NOTES.md \
-  CITATION.cff LICENSE Makefile pyproject.toml CMakeLists.txt \
+  CITATION.cff LICENSE Makefile pyproject.toml CMakeLists.txt REPRODUCE.md \
   "$PKG_DIR/"
 
 for dir in SKILL tilemem tilepo tools configs docs evidence paper scripts examples kernels include src tests; do

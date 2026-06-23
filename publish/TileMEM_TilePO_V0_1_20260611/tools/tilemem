@@ -17,8 +17,18 @@ sys.path.insert(0, str(ROOT))
 QUICK_VERIFY_COMMANDS = [
     "tools/tests/assert_tilemem_sdk.py",
     "tools/tests/assert_checkpoint_integration.py",
+    "tools/tests/assert_release_ready.py",
     "tools/tests/assert_removed_predictor_traces.py",
 ]
+
+RELEASE_WORKLOADS = ["mixed", "long_context"]
+RELEASE_EXPERTS = [2, 4, 6, 8, 10]
+RELEASE_POLICIES = ["kt_expert", "tilepo_coarse", "tilepo_fine", "tilepo_hybrid"]
+RELEASE_ASYNC_MODES = ["off", "on"]
+RELEASE_REPEATS = 3
+RELEASE_REQUEST_COUNT = 5
+RELEASE_EXPECTED_ROWS = 210
+RELEASE_PRECISION = "BF16 / KT-native path"
 
 
 def main() -> int:
@@ -62,6 +72,27 @@ def main() -> int:
     checkpoint_execution.add_argument("--dry-run", action="store_true", default=True)
     checkpoint_execution.add_argument("--execute", action="store_true")
     checkpoint_prepare.set_defaults(handler=_cmd_checkpoint_prepare)
+
+    evidence = subcommands.add_parser("evidence", help="Release evidence commands.")
+    evidence_subcommands = evidence.add_subparsers(dest="evidence_command", required=True)
+    evidence_verify = evidence_subcommands.add_parser(
+        "verify",
+        help="Verify the checked-in TilePO V0.1 BF16 ablation evidence.",
+    )
+    evidence_verify.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("evidence/ablation/tilepo_ablation_manifest.json"),
+        help="Ablation manifest to verify.",
+    )
+    evidence_verify.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("build/release_evidence"),
+        help="Directory for regenerated summary/report files.",
+    )
+    evidence_verify.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    evidence_verify.set_defaults(handler=_cmd_evidence_verify)
 
     args = parser.parse_args()
     try:
@@ -204,6 +235,144 @@ def _cmd_checkpoint_prepare(args: argparse.Namespace) -> int:
         return result.returncode
     print(result.stdout, end="")
     return 0
+
+
+def _cmd_evidence_verify(args: argparse.Namespace) -> int:
+    from tilepo.reporting.ablation import AblationReportError, generate_ablation_report
+
+    try:
+        result = generate_ablation_report(
+            args.manifest,
+            args.out_dir,
+            workloads=RELEASE_WORKLOADS,
+            experts=RELEASE_EXPERTS,
+            policies=RELEASE_POLICIES,
+            async_modes=RELEASE_ASYNC_MODES,
+            repeats=RELEASE_REPEATS,
+            require_real=True,
+        )
+        manifest = json.loads(Path(args.manifest).read_text())
+        runs = [row for row in manifest.get("runs", []) if isinstance(row, dict)]
+        real_success_rows = [
+            row
+            for row in runs
+            if row.get("status") == "success"
+            and row.get("simulated") is False
+            and row.get("evidence_level") == "real"
+            and row.get("request_count") == RELEASE_REQUEST_COUNT
+            and _is_bf16_only_row(row)
+        ]
+        actual_rows = int(manifest.get("actual_result_rows", len(runs)))
+        expected_rows = int(manifest.get("expected_result_rows", RELEASE_EXPECTED_ROWS))
+        failures = []
+        if actual_rows != RELEASE_EXPECTED_ROWS or expected_rows != RELEASE_EXPECTED_ROWS:
+            failures.append(f"unexpected row count: {actual_rows}/{expected_rows}")
+        if len(real_success_rows) != RELEASE_EXPECTED_ROWS:
+            failures.append(f"unexpected real success rows: {len(real_success_rows)}/{RELEASE_EXPECTED_ROWS}")
+        request_counts = sorted({int(row.get("request_count", -1)) for row in real_success_rows})
+        if request_counts != [RELEASE_REQUEST_COUNT]:
+            failures.append(f"unexpected request counts: {request_counts}")
+        invalid_dtype_rows = [index for index, row in enumerate(runs) if not _is_bf16_only_row(row)]
+        if invalid_dtype_rows:
+            failures.append(f"non-BF16 rows: {invalid_dtype_rows[:8]}")
+        if failures:
+            raise AblationReportError("; ".join(failures))
+    except (AblationReportError, ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+        payload = _release_evidence_payload(
+            status="FAIL",
+            gate="FAIL",
+            manifest_path=args.manifest,
+            summary_path=args.out_dir / "tilepo_ablation_summary.json",
+            report_path=args.out_dir / "tilepo_ablation_report.md",
+            actual_rows=0,
+            expected_rows=RELEASE_EXPECTED_ROWS,
+            real_success_rows=0,
+            failures=[str(exc)],
+        )
+        if args.json:
+            _print_json(payload)
+        else:
+            _print_release_evidence(payload)
+        return 1
+
+    payload = _release_evidence_payload(
+        status="PASS",
+        gate=str(result.summary.get("gate", {}).get("status", "PASS")),
+        manifest_path=args.manifest,
+        summary_path=result.summary_path,
+        report_path=result.markdown_path,
+        actual_rows=actual_rows,
+        expected_rows=expected_rows,
+        real_success_rows=len(real_success_rows),
+        failures=[],
+    )
+    if args.json:
+        _print_json(payload)
+    else:
+        _print_release_evidence(payload)
+    return 0
+
+
+def _release_evidence_payload(
+    *,
+    status: str,
+    gate: str,
+    manifest_path: Path,
+    summary_path: Path,
+    report_path: Path,
+    actual_rows: int,
+    expected_rows: int,
+    real_success_rows: int,
+    failures: list[str],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "tilemem_release_evidence_v1",
+        "status": status,
+        "gate": gate,
+        "manifest_path": str(manifest_path),
+        "summary_path": str(summary_path),
+        "report_path": str(report_path),
+        "workloads": RELEASE_WORKLOADS,
+        "experts": RELEASE_EXPERTS,
+        "policies": RELEASE_POLICIES,
+        "async_planning": RELEASE_ASYNC_MODES,
+        "repeats": RELEASE_REPEATS,
+        "request_count": RELEASE_REQUEST_COUNT,
+        "actual_rows": actual_rows,
+        "expected_rows": expected_rows,
+        "real_success_rows": real_success_rows,
+        "serving_precision": RELEASE_PRECISION,
+        "failures": failures,
+    }
+
+
+def _is_bf16_only_row(row: dict[str, Any]) -> bool:
+    dtype_counts = row.get("dtype_counts", {})
+    if not isinstance(dtype_counts, dict):
+        return False
+    if set(dtype_counts) != {"bf16"}:
+        return False
+    try:
+        return int(dtype_counts["bf16"]) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _print_release_evidence(payload: dict[str, Any]) -> None:
+    print("TileMEM / TilePO release evidence")
+    print(f"Workloads: {', '.join(payload['workloads'])}")
+    print(f"Experts: {', '.join(str(item) for item in payload['experts'])}")
+    print(f"Policies: {', '.join(payload['policies'])}")
+    print(f"Async planning: {', '.join(payload['async_planning'])}")
+    print(f"Repeats: {payload['repeats']}")
+    print(f"Request count: {payload['request_count']}")
+    print(f"Rows: {payload['real_success_rows']} / {payload['expected_rows']} real success")
+    print(f"Gate: {payload['gate']}")
+    print(f"Serving precision: {payload['serving_precision']}")
+    print(f"Summary: {payload['summary_path']}")
+    print(f"Report: {payload['report_path']}")
+    for failure in payload["failures"]:
+        print(f"Failure: {failure}", file=sys.stderr)
 
 
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:

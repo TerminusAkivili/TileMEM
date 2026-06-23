@@ -14,6 +14,7 @@ Treat acceleration as a staged evidence chain: health check -> model/checkpoint 
 ```bash
 tools/tilemem doctor
 tools/tilemem verify --quick
+tools/tilemem evidence verify
 python3 examples/tilemem_checkpoint_integration.py
 python3 examples/tilemem_industrial_quickstart.py \
   --out-json build/tilemem_industrial_quickstart.json
