@@ -59,9 +59,19 @@ set_tests_properties(tilemem_replay_tilemem tilemem_replay_on_demand
   PROPERTIES DEPENDS tilemem_generate_demo_data)
 
 add_test(NAME tilepo_ablation COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_tilepo_ablation.py)
-add_test(NAME tmap_prediction COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_tmap.py)
 add_test(NAME tilemem_python_sdk COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_tilemem_sdk.py)
 add_test(NAME tilemem_cli COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_tilemem_cli.py)
 add_test(NAME tilemem_agent_skills COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_agent_skills.py)
 add_test(NAME tilemem_checkpoint_integration COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_checkpoint_integration.py)
 add_test(NAME tilemem_industrial_quickstart COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_tilemem_industrial_quickstart.py)
+add_test(NAME tilemem_removed_predictor_traces COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/tests/assert_removed_predictor_traces.py)
+set_tests_properties(
+  tilepo_ablation
+  tilemem_python_sdk
+  tilemem_cli
+  tilemem_agent_skills
+  tilemem_checkpoint_integration
+  tilemem_industrial_quickstart
+  tilemem_removed_predictor_traces
+  PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

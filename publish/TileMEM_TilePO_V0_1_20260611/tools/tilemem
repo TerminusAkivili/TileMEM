@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 QUICK_VERIFY_COMMANDS = [
     "tools/tests/assert_tilemem_sdk.py",
     "tools/tests/assert_checkpoint_integration.py",
-    "tools/tests/assert_tmap.py",
+    "tools/tests/assert_removed_predictor_traces.py",
 ]
 
 
@@ -62,18 +62,6 @@ def main() -> int:
     checkpoint_execution.add_argument("--dry-run", action="store_true", default=True)
     checkpoint_execution.add_argument("--execute", action="store_true")
     checkpoint_prepare.set_defaults(handler=_cmd_checkpoint_prepare)
-
-    tmap = subcommands.add_parser("tmap", help="TMAP prediction commands.")
-    tmap_subcommands = tmap.add_subparsers(dest="tmap_command", required=True)
-    tmap_predict = tmap_subcommands.add_parser("predict", help="Run TMAP two-tier prediction.")
-    tmap_predict.add_argument("--summary", type=Path, required=True)
-    tmap_predict.add_argument("--hardware-profile", type=Path, required=True)
-    tmap_predict.add_argument("--out-dir", type=Path, required=True)
-    tmap_predict.add_argument("--admit-threshold-pct", type=float, default=3.0)
-    tmap_predict.add_argument("--target", action="append", default=[])
-    tmap_predict.add_argument("--target-experts", default="")
-    tmap_predict.add_argument("--allow-extrapolation", action="store_true")
-    tmap_predict.set_defaults(handler=_cmd_tmap_predict)
 
     args = parser.parse_args()
     try:
@@ -215,46 +203,6 @@ def _cmd_checkpoint_prepare(args: argparse.Namespace) -> int:
         _print_failure("checkpoint preparation failed", command, result)
         return result.returncode
     print(result.stdout, end="")
-    return 0
-
-
-def _cmd_tmap_predict(args: argparse.Namespace) -> int:
-    command = [
-        sys.executable,
-        str(ROOT / "tools" / "tmap_predict"),
-        "--summary",
-        str(args.summary),
-        "--hardware-profile",
-        str(args.hardware_profile),
-        "--out-dir",
-        str(args.out_dir),
-        "--admit-threshold-pct",
-        str(args.admit_threshold_pct),
-    ]
-    for target in args.target:
-        command.extend(["--target", target])
-    if args.target_experts:
-        command.extend(["--target-experts", args.target_experts])
-    if args.allow_extrapolation:
-        command.append("--allow-extrapolation")
-
-    result = _run(command)
-    if result.returncode != 0:
-        _print_failure("TMAP prediction failed", command, result)
-        return result.returncode
-
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if len(lines) < 2:
-        raise ValueError(f"unexpected tmap_predict output: {result.stdout!r}")
-    _print_json(
-        {
-            "schema_version": "tilemem_cli_tmap_predict_v1",
-            "status": "predicted",
-            "summary_path": lines[0],
-            "report_path": lines[1],
-            "tool_stdout": lines,
-        }
-    )
     return 0
 
 

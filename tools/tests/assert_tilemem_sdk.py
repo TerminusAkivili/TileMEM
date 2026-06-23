@@ -16,7 +16,6 @@ def test_import_tilemem_sdk_surface() -> None:
         "BackendCapability",
         "BackendRegistry",
         "CheckpointArtifact",
-        "HardwareProfile",
         "MoETopology",
         "ScaleLayout",
         "ServingCommand",
@@ -32,7 +31,6 @@ def test_import_tilemem_sdk_surface() -> None:
         "build_tile_handles",
         "checkpoint_weight_names",
         "export_checkpoint_artifact",
-        "hardware_profile",
         "infer_moe_topology",
         "load_checkpoint_weight_map",
         "load_hf_config",
@@ -41,7 +39,6 @@ def test_import_tilemem_sdk_surface() -> None:
         "model_spec_from_hf_config",
         "plan",
         "plan_from_hf_config",
-        "predict_policy",
         "register_backend",
         "run_serving_backend",
         "v0_1_headline_gain",
@@ -137,7 +134,7 @@ def test_sdk_registers_external_backend_and_exposes_tile_handles() -> None:
     assert handle.fallback_backend == "kt_fallback"
 
 
-def test_sdk_replays_v0_1_headline_gain_and_tmap_prediction() -> None:
+def test_sdk_replays_v0_1_headline_gain() -> None:
     import tilemem as TM
 
     headline = TM.v0_1_headline_gain()
@@ -145,30 +142,12 @@ def test_sdk_replays_v0_1_headline_gain_and_tmap_prediction() -> None:
     assert headline["best"]["policy"].startswith("tilepo_")
     assert headline["gate"]["status"] == "PASS"
 
-    hardware = TM.hardware_profile(
-        name="rtx5090_ddr_sdk_test",
-        vram_capacity_gib=32.0,
-        vram_bandwidth_gbps=1792.0,
-        vram_latency_ns=350.0,
-        dram_capacity_gib=128.0,
-        dram_bandwidth_gbps=95.0,
-        dram_latency_ns=90_000.0,
-        transfer_bandwidth_gbps=64.0,
-        transfer_latency_us=12.0,
-    )
-    prediction = TM.predict_policy(hardware=hardware, target_pairs=[("mixed", 8)])
-    mixed_8 = prediction.decision_for("mixed", 8)
-    assert mixed_8.admitted_system == "TilePO"
-    assert mixed_8.observed_tok_gain_pct is not None
-    assert mixed_8.observed_tok_gain_pct >= 25.0
-    assert mixed_8.confidence >= 0.5
-
 
 def main() -> None:
     test_import_tilemem_sdk_surface()
     test_sdk_builds_manifest_and_dispatch_handles()
     test_sdk_registers_external_backend_and_exposes_tile_handles()
-    test_sdk_replays_v0_1_headline_gain_and_tmap_prediction()
+    test_sdk_replays_v0_1_headline_gain()
     print("TileMEM SDK tests passed")
 
 

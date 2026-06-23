@@ -40,8 +40,6 @@ def test_industrial_quickstart_runs_through_tilemem_sdk() -> None:
     assert payload["external_kernel"]["source"] == "kernels/gemm_fp8.cu"
     assert payload["external_kernel"]["handle"]["dispatchable"] is True
     assert payload["v0_1_headline_gain"]["best"]["tok_gain_pct"] >= 30.0
-    assert payload["tmap_prediction"]["mixed_8"]["admitted_system"] == "TilePO"
-    assert payload["tmap_prediction"]["mixed_8"]["observed_tok_gain_pct"] >= 25.0
 
 
 def main() -> None:

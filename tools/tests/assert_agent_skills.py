@@ -16,7 +16,7 @@ EXPECTED = {
     ],
     "tilemem-acceleration-path": [
         "tools/tilemem checkpoint prepare",
-        "tools/tilemem tmap predict",
+        "tools/report_tilepo_ablation",
         "Do not benchmark TilePO against KT with different expert budgets",
     ],
     "tilemem-backend-precision-path": [

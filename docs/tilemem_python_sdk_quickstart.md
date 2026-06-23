@@ -15,9 +15,8 @@ tools/tilemem verify --quick
 
 The SDK turns a MoE model description or local Hugging Face-style checkpoint
 config into a TileMEM MIR, deployment manifest, dispatchable tile handles,
-backend capability checks, and TMAP policy decisions. TileMEM owns tile
-planning and metadata. External developers own low-precision kernels and
-numerical validation.
+and backend capability checks. TileMEM owns tile planning and metadata.
+External developers own low-precision kernels and numerical validation.
 
 ## 1. Build A Small MoE Model Spec
 
@@ -126,51 +125,7 @@ The sample FP8 entrypoint above is an integration contract example. Production
 launchers should replace it with a customer-owned CUDA, HIP, vendor library, or
 serving-runtime path.
 
-## 4. Run TMAP Against V0.1 Evidence
-
-TMAP predicts relative KT versus TilePO policy preference from the checked-in
-V0.1 BF16 evidence and a two-tier VRAM/DRAM hardware profile. It does not
-predict exact serving throughput.
-
-```python
-hardware = TM.hardware_profile(
-    name="rtx5090_ddr",
-    vram_capacity_gib=32.0,
-    vram_bandwidth_gbps=1792.0,
-    vram_latency_ns=350.0,
-    dram_capacity_gib=128.0,
-    dram_bandwidth_gbps=95.0,
-    dram_latency_ns=90_000.0,
-    transfer_bandwidth_gbps=64.0,
-    transfer_latency_us=12.0,
-)
-
-prediction = TM.predict_policy(
-    hardware=hardware,
-    target_pairs=[("mixed", 8)],
-)
-
-decision = prediction.decision_for("mixed", 8)
-print(decision.admitted_system)
-print(decision.recommended_policy)
-print(decision.predicted_tok_gain_pct)
-print(decision.confidence)
-```
-
-For unseen expert budgets, enable extrapolation explicitly:
-
-```python
-prediction = TM.predict_policy(
-    hardware=hardware,
-    target_pairs=[("mixed", 12)],
-    allow_extrapolation=True,
-)
-```
-
-Treat extrapolated decisions as quick-planning estimates that still need a
-short production probe.
-
-## 5. Read The V0.1 Headline KT Comparison
+## 4. Read The V0.1 Headline KT Comparison
 
 Use `TM.v0_1_headline_gain()` to replay the public V0.1 BF16 evidence summary.
 When the checked-in evidence is present, the best TilePO row is expected to show
@@ -270,7 +225,6 @@ TileMEM provides:
 - stable tile IDs, byte offsets, scale metadata fields, and fallback metadata;
 - backend capability registration and dispatchable-handle checks;
 - dry-run KT/SGLang serving command generation;
-- TMAP policy prediction from V0.1 BF16 evidence.
 
 External developers provide and validate:
 

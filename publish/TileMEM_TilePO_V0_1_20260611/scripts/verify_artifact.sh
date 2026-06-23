@@ -10,7 +10,7 @@ else
   PACKAGE_DIR="."
 fi
 
-python3 -m compileall -q tilemem tilepo TMAP
+python3 -m compileall -q tilemem tilepo
 python3 tools/tests/assert_agent_skills.py
 python3 tools/tests/assert_tilemem_sdk.py
 python3 tools/tests/assert_tilemem_cli.py
@@ -23,11 +23,10 @@ python3 tools/tests/assert_customer_integration_end_to_end.py
 python3 tools/tests/assert_tilepo_ablation.py
 python3 tools/tests/assert_openai_varprompt_bench.py
 python3 tools/tests/assert_sweep_bench_tool.py
-python3 tools/tests/assert_tmap.py
+python3 tools/tests/assert_removed_predictor_traces.py
 bash scripts/reproduce_ablation.sh
 
 for required in \
-  "$PACKAGE_DIR/TMAP/README.md" \
   "$PACKAGE_DIR/SKILL/tilemem-environment-setup/SKILL.md" \
   "$PACKAGE_DIR/SKILL/tilemem-environment-setup/agents/openai.yaml" \
   "$PACKAGE_DIR/SKILL/tilemem-acceleration-path/SKILL.md" \
@@ -66,11 +65,10 @@ for required in \
   "$PACKAGE_DIR/tools/tests/assert_openai_varprompt_bench.py" \
   "$PACKAGE_DIR/tools/tests/assert_sweep_bench_tool.py" \
   "$PACKAGE_DIR/tools/tilemem_checkpoint_prepare" \
-  "$PACKAGE_DIR/tools/tmap_predict" \
   "$PACKAGE_DIR/tools/tests/assert_public_mir_interface.py" \
-  "$PACKAGE_DIR/tools/tests/assert_tmap.py"; do
+  "$PACKAGE_DIR/tools/tests/assert_removed_predictor_traces.py"; do
   if [[ ! -f "$required" ]]; then
-    echo "missing packaged TMAP artifact: $required" >&2
+    echo "missing packaged artifact: $required" >&2
     exit 1
   fi
 done
@@ -89,7 +87,6 @@ fi
 if [[ -f "publish/$PKG_NAME.tar.gz.sha256" ]]; then
   (cd publish && sha256sum -c "$PKG_NAME.tar.gz.sha256")
   tar -tzf "publish/$PKG_NAME.tar.gz" \
-    "$PKG_NAME/TMAP/README.md" \
     "$PKG_NAME/SKILL/tilemem-environment-setup/SKILL.md" \
     "$PKG_NAME/SKILL/tilemem-environment-setup/agents/openai.yaml" \
     "$PKG_NAME/SKILL/tilemem-acceleration-path/SKILL.md" \
@@ -128,9 +125,8 @@ if [[ -f "publish/$PKG_NAME.tar.gz.sha256" ]]; then
     "$PKG_NAME/tools/tests/assert_openai_varprompt_bench.py" \
     "$PKG_NAME/tools/tests/assert_sweep_bench_tool.py" \
     "$PKG_NAME/tools/tilemem_checkpoint_prepare" \
-    "$PKG_NAME/tools/tmap_predict" \
     "$PKG_NAME/tools/tests/assert_public_mir_interface.py" \
-    "$PKG_NAME/tools/tests/assert_tmap.py" >/dev/null
+    "$PKG_NAME/tools/tests/assert_removed_predictor_traces.py" >/dev/null
 fi
 
 echo "TileMEM / TilePO artifact verification passed."

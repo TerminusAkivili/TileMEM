@@ -1,13 +1,13 @@
 ---
 name: tilemem-acceleration-path
-description: Use when connecting a MoE model or checkpoint to TileMEM, compiling MIR/manifests, preparing checkpoint artifacts, running TilePO/KT comparisons, using TMAP, or choosing a TileMEM acceleration path.
+description: Use when connecting a MoE model or checkpoint to TileMEM, compiling MIR/manifests, preparing checkpoint artifacts, running TilePO/KT comparisons, or choosing a TileMEM acceleration path.
 ---
 
 # TileMEM Acceleration Path
 
 ## Overview
 
-Treat acceleration as a staged evidence chain: health check -> model/checkpoint metadata -> MIR/manifest/tile handles -> dry-run backend command -> TMAP narrowing -> same-budget KT vs TilePO benchmark.
+Treat acceleration as a staged evidence chain: health check -> model/checkpoint metadata -> MIR/manifest/tile handles -> dry-run backend command -> same-budget KT vs TilePO benchmark.
 
 ## Required First Checks
 
@@ -45,7 +45,7 @@ tools/tilemem checkpoint prepare \
 
 Inspect `model_spec.json`, `model.mir.json`, `model.manifest.json`, `checkpoint_weight_map.json`, `tile_checkpoint_map.json`, and `checkpoint_artifact_summary.json`. Only use `--execute` after the generated command, backend binary, model path, tile map, and fallback path are correct.
 
-## Compile And Predict
+## Compile And Select A Probe
 
 Compile a public spec or `.tmem` plan:
 
@@ -59,25 +59,18 @@ tools/tilemem compile \
   --out-dir build/my_moe_plan_compile
 ```
 
-Use TMAP to reduce scan size:
+Use the checked-in V0.1 evidence to pick a small same-budget probe:
 
 ```bash
-tools/tilemem tmap predict \
+tools/report_tilepo_ablation \
   --summary evidence/ablation/tilepo_ablation_summary.json \
-  --hardware-profile TMAP/hardware_profiles/rtx5090_ddr.json \
-  --out-dir build/tmap_my_gpu \
-  --target mixed:8
+  --out build/tilepo_ablation_report.md
 ```
 
-For unseen budgets, require explicit extrapolation and call it a planning estimate:
+For an unseen expert budget, run a short direct probe instead of extrapolating:
 
 ```bash
-tools/tilemem tmap predict \
-  --summary evidence/ablation/tilepo_ablation_summary.json \
-  --hardware-profile TMAP/hardware_profiles/rtx5090_ddr.json \
-  --out-dir build/tmap_mixed_12 \
-  --target mixed:12 \
-  --allow-extrapolation
+tools/run_tilepo_ablation --experts 12 --workload mixed --repeats 1
 ```
 
 ## Benchmark Decision Rule
@@ -90,12 +83,11 @@ Compare at the same expert budget:
 - TilePO hybrid
 - async planning off/on when supported
 
-Choose TilePO only when it beats KT at the same expert budget on throughput without p95/p99 regression. If TMAP predicts low gain, confidence is low, or VRAM is abundant enough that KT wins, recommend KT fallback or a shorter targeted probe.
+Choose TilePO only when it beats KT at the same expert budget on throughput without p95/p99 regression. If the direct probe is weak, noisy, or VRAM is abundant enough that KT wins, recommend KT fallback or a shorter targeted probe.
 
 ## Guardrails
 
 - Do not claim universal speedup; TilePO benefits are workload/hardware/budget dependent.
-- Do not treat TMAP as exact tok/s prediction; it predicts policy preference and confidence.
 - Do not skip manifest and tile map inspection for real checkpoints.
 - Do not benchmark TilePO against KT with different expert budgets.
 - Keep BF16/KT fallback available while integrating a model.

@@ -4,7 +4,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 import json
 from pathlib import Path
-import sys
 from typing import Any
 
 from tilepo import env
@@ -70,17 +69,6 @@ from .checkpoint import (
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_V0_1_SUMMARY = Path("evidence") / "ablation" / "tilepo_ablation_summary.json"
-
-
-def _load_tmap_symbols() -> tuple[type[Any], type[Any], type[Any], Any]:
-    try:
-        from tmap import HardwareProfile, PredictionResult, TMAPDecision, predict_from_summary
-    except ModuleNotFoundError:
-        tmap_root = _artifact_root() / "TMAP"
-        if tmap_root.exists() and str(tmap_root) not in sys.path:
-            sys.path.insert(0, str(tmap_root))
-        from tmap import HardwareProfile, PredictionResult, TMAPDecision, predict_from_summary
-    return HardwareProfile, PredictionResult, TMAPDecision, predict_from_summary
 
 
 @dataclass(frozen=True)
@@ -170,29 +158,6 @@ def plan(
     return TileMEMPlan(mir=mir, manifest=manifest, handles=handles)
 
 
-def hardware_profile(**kwargs: Any) -> Any:
-    return HardwareProfile.from_dict(dict(kwargs))
-
-
-def predict_policy(
-    *,
-    hardware: Any,
-    summary_path: Path | str | None = None,
-    admit_threshold_pct: float = 3.0,
-    target_experts: list[int] | None = None,
-    target_pairs: list[tuple[str, int]] | None = None,
-    allow_extrapolation: bool = False,
-) -> Any:
-    return _predict_from_summary(
-        _default_summary_path(summary_path),
-        hardware,
-        admit_threshold_pct=admit_threshold_pct,
-        target_experts=target_experts,
-        target_pairs=target_pairs,
-        allow_extrapolation=allow_extrapolation,
-    )
-
-
 def v0_1_headline_gain(summary_path: Path | str | None = None) -> dict[str, Any]:
     summary = _load_v0_1_summary(summary_path)
     rows = _v0_1_gain_rows(summary)
@@ -252,9 +217,6 @@ def _artifact_roots() -> list[Path]:
         seen.add(resolved)
         deduped.append(resolved)
     return deduped
-
-
-HardwareProfile, PredictionResult, TMAPDecision, _predict_from_summary = _load_tmap_symbols()
 
 
 def _load_v0_1_summary(summary_path: Path | str | None) -> dict[str, Any]:

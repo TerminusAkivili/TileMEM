@@ -4,7 +4,7 @@ Use this package as:
 
     import tilemem as TM
 
-The facade keeps customer-facing APIs stable while TilePO, TMAP, and backend
+The facade keeps customer-facing APIs stable while TilePO and backend
 integration internals continue to evolve.
 """
 
@@ -14,7 +14,6 @@ from .sdk import (
     BackendRegistry,
     CheckpointArtifact,
     DeploymentMode,
-    HardwareProfile,
     MIR_SCHEMA_VERSION,
     MODEL_SPEC_SCHEMA_VERSION,
     MoETopology,
@@ -23,7 +22,6 @@ from .sdk import (
     ModelSpec,
     PUBLIC_MIR_INTERFACE,
     PrecisionIR,
-    PredictionResult,
     ResidencyIR,
     RouteIR,
     RuntimeMode,
@@ -31,7 +29,6 @@ from .sdk import (
     ScheduleIR,
     ServingCommand,
     ServingResult,
-    TMAPDecision,
     TileDType,
     TileFormat,
     TileHandle,
@@ -49,7 +46,6 @@ from .sdk import (
     build_tile_handles,
     checkpoint_weight_names,
     export_checkpoint_artifact,
-    hardware_profile,
     infer_moe_topology,
     load_checkpoint_weight_map,
     load_hf_config,
@@ -62,7 +58,6 @@ from .sdk import (
     model_spec_to_dict,
     plan,
     plan_from_hf_config,
-    predict_policy,
     register_backend,
     run_serving_backend,
     save_mir,
@@ -79,7 +74,6 @@ __all__ = [
     "BackendRegistry",
     "CheckpointArtifact",
     "DeploymentMode",
-    "HardwareProfile",
     "MIR_SCHEMA_VERSION",
     "MODEL_SPEC_SCHEMA_VERSION",
     "MoETopology",
@@ -88,7 +82,6 @@ __all__ = [
     "ModelSpec",
     "PUBLIC_MIR_INTERFACE",
     "PrecisionIR",
-    "PredictionResult",
     "ResidencyIR",
     "RouteIR",
     "RuntimeMode",
@@ -96,7 +89,6 @@ __all__ = [
     "ScheduleIR",
     "ServingCommand",
     "ServingResult",
-    "TMAPDecision",
     "TileDType",
     "TileFormat",
     "TileHandle",
@@ -115,7 +107,6 @@ __all__ = [
     "build_tile_handles",
     "checkpoint_weight_names",
     "export_checkpoint_artifact",
-    "hardware_profile",
     "infer_moe_topology",
     "load_checkpoint_weight_map",
     "load_hf_config",
@@ -128,7 +119,6 @@ __all__ = [
     "model_spec_to_dict",
     "plan",
     "plan_from_hf_config",
-    "predict_policy",
     "register_backend",
     "run_serving_backend",
     "save_mir",

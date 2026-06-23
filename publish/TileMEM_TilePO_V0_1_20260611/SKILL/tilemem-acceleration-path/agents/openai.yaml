@@ -1,4 +1,4 @@
 interface:
   display_name: "TileMEM Acceleration Path"
-  short_description: "Connect models to TilePO and TMAP"
+  short_description: "Connect models to TilePO and validate same-budget evidence"
   default_prompt: "Use $tilemem-acceleration-path to connect a MoE model and find a TileMEM acceleration path."

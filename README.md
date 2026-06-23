@@ -110,48 +110,6 @@ Serving precision: BF16 / KT-native path
   <img src="docs/assets/tilepo-p95-improvement.png" alt="TilePO p95 latency improvement over KT across expert budgets" width="860">
 </p>
 
-## TMAP Predictor
-
-TMAP, short for Two-Tier Tile Memory Allocation Predictor, is an experimental
-hardware-aware cost-model module for TileMEM. TMAP V0.1 reuses the public
-TilePO V0.1 BF16 samples and predicts relative policy preference under a
-two-tier VRAM/DRAM hardware profile.
-
-TMAP is intentionally conservative:
-
-- it predicts KT vs TilePO policy preference, not exact serving tok/s;
-- it models the current two-tier VRAM/DRAM setting only;
-- it uses BF16 V0.1 samples for calibration;
-- it recommends fallback KT when predicted TilePO gain is below threshold.
-- it can explicitly extrapolate unseen expert budgets, but those decisions are
-  marked as quick-planning estimates and include a short probe recommendation.
-
-Example:
-
-```bash
-tools/tmap_predict \
-  --summary evidence/ablation/tilepo_ablation_summary.json \
-  --hardware-profile TMAP/hardware_profiles/rtx5090_ddr.json \
-  --out-dir build/tmap_rtx5090_ddr
-```
-
-Example quick-planning extrapolation for an unseen expert budget:
-
-```bash
-tools/tmap_predict \
-  --summary evidence/ablation/tilepo_ablation_summary.json \
-  --hardware-profile TMAP/hardware_profiles/rtx5090_ddr.json \
-  --out-dir build/tmap_rtx5090_ddr_mixed12 \
-  --target mixed:12 \
-  --allow-extrapolation
-```
-
-Use `--target-experts 12` only when you intentionally want to scan that expert
-budget for every measured workload.
-
-See [TMAP/README.md](TMAP/README.md) and the checked-in reports under
-[TMAP/reports](TMAP/reports).
-
 ## Industrial Python SDK
 
 TileMEM exposes a compact Python facade for application and kernel integration:
@@ -174,7 +132,7 @@ print(TM.v0_1_headline_gain()["best"])
 
 The SDK wraps the public model interface, HF checkpoint topology inference,
 MIR/manifest generation, backend capability registration, tile-handle
-construction, TMAP prediction, and the V0.1 KT comparison evidence. A runnable
+construction, and the V0.1 KT comparison evidence. A runnable
 end-to-end SDK sample is available at:
 
 ```bash
@@ -183,8 +141,8 @@ python3 examples/tilemem_industrial_quickstart.py \
 ```
 
 The quickstart validates the `import tilemem as TM` flow, emits an external
-CUDA FP8 kernel handle for `kernels/gemm_fp8.cu`, runs TMAP over the V0.1
-evidence, and reports the measured V0.1 TilePO-vs-KT headline gain.
+CUDA FP8 kernel handle for `kernels/gemm_fp8.cu`, and reports the measured
+V0.1 TilePO-vs-KT headline gain.
 See [docs/tilemem_python_sdk_quickstart.md](docs/tilemem_python_sdk_quickstart.md).
 
 ## Roadmaps
@@ -201,7 +159,6 @@ tools/tilemem doctor
 tools/tilemem verify --quick
 tools/tilemem compile --model-spec configs/models/model_spec_template.json --out-dir build/cli_compile
 tools/tilemem checkpoint prepare --checkpoint-dir /path/to/hf_checkpoint --out-dir build/checkpoint --backend sglang --dry-run
-tools/tilemem tmap predict --summary evidence/ablation/tilepo_ablation_summary.json --hardware-profile TMAP/hardware_profiles/rtx5090_ddr.json --out-dir build/tmap --target mixed:8
 ```
 
 The CLI is intentionally an orchestration entrypoint. Kernel authors and Python
@@ -216,18 +173,18 @@ boundaries consistently:
 - `tilemem-environment-setup`: configure and verify a local checkout without
   forcing GPU/CMake or large checkpoint downloads.
 - `tilemem-acceleration-path`: connect MoE checkpoints to TileMEM, then use
-  TilePO/TMAP with dry-run artifacts and same-budget KT comparisons.
+  TilePO with dry-run artifacts and same-budget KT comparisons.
 - `tilemem-backend-precision-path`: extend FP8/F6/F4 backend metadata and
   external-kernel integration while preserving BF16/KT fallback and claim
   boundaries.
 
 ### Core Python API Examples
 
-The top-level SDK currently exposes 61 public symbols. Most users only need the
+The top-level SDK exposes a compact public surface. Most users only need the
 core path below:
 
 ```text
-model spec -> MIR -> manifest -> tile handles -> backend dispatch / TMAP decision
+model spec -> MIR -> manifest -> tile handles -> backend dispatch
 ```
 
 #### 1. Build A Model Spec And Compile A TileMEM Plan
@@ -347,37 +304,7 @@ backend capability checks, tile handles, and fallback descriptors. External
 developers own concrete FP8/FP6/FP4 kernels, model adaptation, quantization,
 calibration, quality evaluation, and backend-specific physical layouts.
 
-#### 4. Predict A Policy With TMAP And Replay V0.1 Evidence
-
-TMAP uses the checked-in V0.1 BF16 evidence plus a two-tier VRAM/DRAM hardware
-profile to recommend whether a target workload should use KT or TilePO.
-
-```python
-hardware = TM.hardware_profile(
-    name="rtx5090_ddr",
-    vram_capacity_gib=32.0,
-    vram_bandwidth_gbps=1792.0,
-    vram_latency_ns=350.0,
-    dram_capacity_gib=128.0,
-    dram_bandwidth_gbps=95.0,
-    dram_latency_ns=90_000.0,
-    transfer_bandwidth_gbps=64.0,
-    transfer_latency_us=12.0,
-)
-
-prediction = TM.predict_policy(
-    hardware=hardware,
-    target_pairs=[("mixed", 8)],
-)
-decision = prediction.decision_for("mixed", 8)
-
-print(decision.admitted_system)
-print(decision.recommended_policy)
-print(decision.predicted_tok_gain_pct)
-print(decision.confidence)
-```
-
-To replay the public V0.1 TilePO-vs-KT evidence:
+#### 4. Replay V0.1 Evidence
 
 ```python
 headline = TM.v0_1_headline_gain()
@@ -545,7 +472,6 @@ production benchmark CLI work are planned as separate V0.12 changes.
 ## Repository Layout
 
 ```text
-TMAP/             Two-tier hardware-aware Tile Memory Allocation Predictor.
 tilepo/            TilePO Python implementation.
 tools/             Reporters, sweep runners, V0.1 plan renderers, tests.
 configs/          Replaceable model, workload, and plan examples.

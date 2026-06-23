@@ -27,7 +27,7 @@ def test_doctor_outputs_json_status() -> None:
     payload = json.loads(completed.stdout)
     assert payload["schema_version"] == "tilemem_cli_doctor_v1"
     assert payload["tilemem_importable"] is True
-    assert payload["api_symbols"] >= 60
+    assert payload["api_symbols"] >= 50
     assert "python" in payload
 
 
@@ -131,34 +131,12 @@ def test_checkpoint_prepare_dry_run_generates_artifact() -> None:
         assert payload["serving"]["status"] == "dry_run"
 
 
-def test_tmap_predict_wraps_existing_predictor() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        completed = _run(
-            "tmap",
-            "predict",
-            "--summary",
-            "evidence/ablation/tilepo_ablation_summary.json",
-            "--hardware-profile",
-            "TMAP/hardware_profiles/rtx5090_ddr.json",
-            "--out-dir",
-            str(Path(tmp) / "tmap"),
-            "--target",
-            "mixed:8",
-        )
-        payload = json.loads(completed.stdout)
-        assert payload["schema_version"] == "tilemem_cli_tmap_predict_v1"
-        assert payload["status"] == "predicted"
-        assert Path(payload["summary_path"]).exists()
-        assert Path(payload["report_path"]).exists()
-
-
 def main() -> None:
     test_doctor_outputs_json_status()
     test_verify_quick_runs_core_assertions()
     test_compile_wraps_existing_model_spec_compiler()
     test_compile_wraps_existing_tmem_plan_compiler()
     test_checkpoint_prepare_dry_run_generates_artifact()
-    test_tmap_predict_wraps_existing_predictor()
     print("TileMEM CLI tests passed")
 
 

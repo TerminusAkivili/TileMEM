@@ -58,19 +58,6 @@ def build_payload() -> dict[str, Any]:
     external_handles = TM.build_tile_handles(external_manifest, registry=registry)
     external_handle = external_handles[0]
 
-    hardware = TM.hardware_profile(
-        name="rtx5090_ddr_quickstart",
-        vram_capacity_gib=32.0,
-        vram_bandwidth_gbps=1792.0,
-        vram_latency_ns=350.0,
-        dram_capacity_gib=128.0,
-        dram_bandwidth_gbps=95.0,
-        dram_latency_ns=90_000.0,
-        transfer_bandwidth_gbps=64.0,
-        transfer_latency_us=12.0,
-    )
-    prediction = TM.predict_policy(hardware=hardware, target_pairs=[("mixed", 8)])
-    mixed_8 = prediction.decision_for("mixed", 8)
     headline = TM.v0_1_headline_gain()
 
     return {
@@ -91,10 +78,6 @@ def build_payload() -> dict[str, Any]:
                 "The real CUDA sample lives in kernels/gemm_fp8.cu. "
                 "This quickstart validates the TileMEM runtime contract without requiring nvcc."
             ),
-        },
-        "tmap_prediction": {
-            "summary": prediction.summary,
-            "mixed_8": mixed_8.to_dict(),
         },
         "v0_1_headline_gain": headline,
         "responsibility_boundary": {
