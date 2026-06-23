@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="docs/assets/tilemem-logo.png" alt="TileMEM logo" width="760">
-</p>
+
 
 # TileMEM / TilePO
 
